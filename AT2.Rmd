@@ -1,0 +1,38 @@
+---
+title: "AT2 Credit Default"
+author: "Edward Truong / Alex Brooks"
+date: "26/09/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objectives
+1. Develop and deploy a classification model an a product purchase data set.
+2. End to end analysis using R
+3. Learn the `caret` package for ML
+4. Learn to present the case using Rmarkdown
+
+## Read in the dataset
+
+```{r Read in the dataset, error=FALSE, message=FALSE, warning = FALSE}
+library(tidyverse)
+library(dplyr)      #used by Caret
+library(ggplot2)
+
+setwd("~/Documents/brookstruong")
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

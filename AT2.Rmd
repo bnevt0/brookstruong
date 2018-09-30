@@ -18,14 +18,25 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Read in the dataset
 
 ```{r Read in the dataset, error=FALSE, message=FALSE, warning = FALSE}
-library(tidyverse)
-library(dplyr)      #used by Caret
-library(ggplot2)
-library(corrplot)
+library(RCurl, quietly = T)
+library(tidyverse, quietly = T)
+library(dplyr, quietly = T)      #used by Caret
+library(ggplot2, quietly = T)
+library(corrplot, quietly =T)
+
+readData <- function(path.name, file.name, column.types, missing.types) {
+  gurl <- paste(path.name,file.name, sep="")
+  download.file(gurl,file.name,method="curl", quiet =T)
+  tbl_df(read.csv(file.name,colClasses = column.types,na.strings=missing.types))
+}
+
+
 
 setwd("~/Documents/brookstruong")
 
 import_train <- read_csv("AT2_credit_train_STUDENT.csv")
+
+
 ```
 
 23,101 observations over 17 variables
@@ -34,22 +45,50 @@ import_train <- read_csv("AT2_credit_train_STUDENT.csv")
 glimpse(import_train)
 
 import_train$default <- as.factor(import_train$default)
+import_train$SEX <- as.factor(import_train$SEX)
+import_train$EDUCATION <- as.factor(import_train$EDUCATION)
+import_train$MARRIAGE <- as.factor(import_train$MARRIAGE)
+
 ```
 
 Looking at the dataset and how the `read_csv` imported the csv, we can understand that the date is imported as a <chr> string rather than <date>. 
 
 ```{r Trainset, echo=TRUE}
 summary(import_train)
+
+import_train %>%
+  arrange(AGE>80) %>%
+  ggplot(aes(x=AGE)) + geom_histogram() 
+
+ggplot
+
 ```
 
+Missing data = 3NA for sex.
 
 ```{r Correlation Plot}
 cplot <- import_train %>%
-  select(-default)
+  select(-default) %>%
+  select_if(is.numeric)
 
 M <- cor(cplot)
-corrplot(M, type="upper")
+p.mat <- cor.mtest(M)
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, 
+         method = "color",
+         order= "hclust",
+         type="full",
+         col=col(200),
+         diag =F,
+         title="Correlation of Numeric Variables",
+         addCoef.col = "black",
+         sig.level = 0.05,
+         insig ="blank",
+         mar=c(0,0,3,0))
+
+corrplot(M, method = "color")
 ```
+
 
 ```{r pressure, echo=FALSE}
 plot(pressure)

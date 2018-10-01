@@ -1,0 +1,211 @@
+---
+title: "AT2 Data Cleaning & Revised Modelling by AB"
+author: "Alex Brooks"
+date: "1 October 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(ROCR)
+library(glmnet)
+```
+
+# Clean the data to prepare for our modelling
+
+EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
+
+This document contains functions we can use as a team to clean our data and train/test our data in comparable ways. See code chunk: "data_clean" and code chunk: "test_train"
+
+```{r}
+#Import the data from supplied train and test sets
+credit_training <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+credit_test <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+```
+##Clean the data based on observations
+
+```{r data_clean}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Cleaned ID into character, Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables. See explanation in markdown if you want to know more.
+#also removed previously coded factors of marriage, sex and education
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex, call it new_sex and change the animal classifications to 0
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+  #clean age to remove aged over 100 entries and make them NA first
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+  output$AGE[is.na(output$AGE)] <- round(mean(output$AGE[!is.na(output$AGE)]))
+
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
+  
+  return(output)
+}
+```
+
+
+```{r}
+credit_train_clean <- clean_data(credit_training)
+credit_test_clean <- clean_data(credit_test)
+
+str(credit_train_clean)
+str(credit_test_clean)
+#note test data has no default, so we need to do a split of our train data
+
+#Check age cleaning so you can verify the over 100s are removed and replaced with median of 35
+cleaningup <- credit_train_clean %>%
+  group_by(AGE) %>%
+  summarise(count=n())
+View(cleaningup)
+
+```
+##Data cleaning explanations
+Education has a broad range of numbers but 0 and 4, 5 & 6 are all "others" or "unknown" - I have cleaned them all to be classed the same as "4" and call them others?  
+
+When it comes to sex, what do we do with the 3 instances of 0 (the previous animals). We could remove them, given how few of them there are.
+
+Marriage has similar problems to education - what do we do with 0 and 3 - we should probably combine them as 'others'.
+
+Age has 50 NAs from previous cleaning (as they were over 100 years and inaccurate) - the real question is do we reduce age to age brackets to use that instead of age? If you look at the first modelling done by AB, you see age is only a 0.5 predictor so perhaps re-creating different age brackets might make age a stronger predictor?
+
+Note - this cleaning resulted in a slight AUC improvement on the initial linear model.
+
+Run a linear model with the training data.
+First, split the training data into a test and train (as the test data supplied has no default)
+```{r test_train}
+
+# Description: use this function each time we do test train, calling dataset name and the split number
+# -----------
+# Split data into random train and test sets, then add them back to a single dataframe.
+# A new column called 'is_train' indicats whether a row belongs to the training set (1) or test set (0)
+
+# Parameters
+# ----------
+  # dataSet (dataframe) - data frame of data with test and train split
+
+# Returns - a data frame
+
+train_test_set <- function(dataSet, split) {
+  
+  trainset_size = floor(split * nrow(dataSet))
+  
+  set.seed(333)
+  
+  #this is via randomly picking observations using the sample function
+  trainset_indices = sample(seq_len(nrow(dataSet)), size = trainset_size)
+  
+  #assign observations to training and testing sets
+  trainset = dataSet[trainset_indices, ]
+  testset = dataSet[-trainset_indices, ]
+  
+  #Add a column to each data frame called 'is_train'. for training set, set it to 1, for test set, set it to 0.
+  trainset$is_train = 1
+  testset$is_train = 0
+  
+  #Bind the 2 data frames back together
+  output = rbind(trainset,testset)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+# done an 80:20 split on our training data (80% is train values)
+credit_train_clean_for_GLM <- train_test_set(credit_train_clean, 0.8)
+```
+Only want the stuff that is an 'is train' value of 1 - because I only want the training data of the trainset
+## See model training example below - but the two key functions are above this
+I've just kept the glm model in as an example to see how this compares to the other AT2ModellingAB.Rmd that I committed earlier.
+```{r}
+glm_test_set <- filter(credit_train_clean_for_GLM, is_train==0)
+glm_train_set <- filter(credit_train_clean_for_GLM, is_train==1)
+#We run a linear regression model on our training set  
+glm.model = glm(formula = default ~ ., family = binomial, data = glm_train_set[,-1])
+
+summary(glm.model)
+```
+##
+Summary says most important predictors are Limit balance, Education, All Pay variables and Amt_pc1-2 variables.
+Analyse the predictors and determine which ones are the valid ones to keep (feature selection).
+
+```{r}
+# probabilities on our test data that's been split from our training IE not the provided test
+probabilities <- predict.glm(glm.model,glm_test_set[,-1],type="response")
+# Create a vector to hold predictions
+predictions <- rep("N",nrow(glm_test_set[,-1])) 
+predictions[probabilities >.5] <- "Y" #turned it from a probability to a prediction
+#Create a confusion matrix
+glm_confusion_matrix <- table(pred=predictions,true=glm_test_set$default)
+
+glm_confusion_matrix
+```
+
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+#converted CM to dataframe extracted the frequency values for each score
+glm_confusion_matrix_df <- as.data.frame(glm_confusion_matrix)
+glm_tn <- glm_confusion_matrix_df$Freq[1]
+glm_fp <- glm_confusion_matrix_df$Freq[2]
+glm_fn <- glm_confusion_matrix_df$Freq[3]
+glm_tp <- glm_confusion_matrix_df$Freq[4]
+glm_evaluation_measures <- get_evaluation_measures("model_train", glm_tn, glm_fp, glm_fn, glm_tp)
+#glm_evaluation_measures now holds a dataframe showing accuracy, precision, recall and F1
+glm_evaluation_measures
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+```{r}
+glm_evaluation_measures$AUC <- get_auc(probabilities, glm_test_set$default)
+glm_evaluation_measures
+```

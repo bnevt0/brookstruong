@@ -370,6 +370,43 @@ knnFit <- train(
     tuneGrid = knnGrid
 )
 
-
+save(knnFit, file = 'knnFit')
 
 ```
+
+
+```{r}
+knnFit
+
+```
+
+```{r}
+plot(knnFit)
+densityplot(knnFit,pch='|')
+predict(knnFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+## SVM
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+svmFit <- train(
+    default~.,
+    train.imp,
+    method = 'svmRadial',
+    trControl = ctrl,
+    tuneGrid = expand.grid(C=c(0.05,0.1,0.2,0.3), sigma=c(0.001,0.005,0.01,0.015))
+)
+save(svmFit,file = 'svmFit')
+
+```
+
+

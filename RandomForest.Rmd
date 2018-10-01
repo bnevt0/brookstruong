@@ -157,3 +157,39 @@ rf.eval$AUC <- get_auc(rf.model$test$votes[,2], test.set[,target.col])
 rf.eval
 
 ```
+
+#4. Now use the Random Forest model to predict for the validation set
+
+```{r}
+#Load the vaidation set
+#NOTE:this validation set needed an ID added (hence the CORRECTED in the file name)
+testset <- read.csv("AT2_credit_test_STUDENT.csv")
+
+#Train set is the full repurchase training set after cleaning for the tree models
+final.trainset <- training.clean
+
+str(final.trainset)
+
+#Test set
+final.testset <- clean_data(testset)
+
+str(final.testset)
+
+#Run the model (don't include ID, age or gender columns in the testset)
+validation.model <- randomForest(default~.,
+                                 data = final.trainset[,-1], 
+                                 importance = TRUE, 
+                                 xtest = final.testset[,-1],
+                                 ntree = 1000)
+
+#predictions for test set
+final.testset$default <- validation.model$test$predicted
+
+final_output <- final.testset %>%
+    select(ID, default)
+
+final_output$default <- ifelse(final_output$default == "Y", 1, 0)
+
+write.csv(final_output, file="predictions/rf_results.csv", row.names=FALSE)
+
+```

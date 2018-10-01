@@ -259,21 +259,20 @@ ctrl <- trainControl(method = "repeatedcv",
                      savePredictions = T
                      )
 xgbGrid <- expand.grid(
-  nrounds = seq(14,24,2),
-  max_depth = seq(2,8,2),
-  eta=c(0.1,0.2,0.3),
-  gamma=1,
-  colsample_bytree=1,
-  min_child_weight=1,
-  subsample=1
+    nrounds=seq(14,24,2),
+    max_depth=seq(2,8,2),
+    eta=c(0.1, 0.2, 0.3),
+    gamma=1,
+    colsample_bytree=1,
+    min_child_weight=1,
+    subsample=1
 )
-
 xgbFit <- train(
-  default~.,
-  train.imp,
-  method = 'xgbTree',
-  trcontrol = ctrl,
-  tuneGrid = xgbGrid
+    default~.,
+    train.imp,
+    method = 'xgbTree',
+    trControl = ctrl,
+    tuneGrid = xgbGrid
 )
 
 save(xgbFit, file = 'xgbFit')
@@ -405,8 +404,52 @@ svmFit <- train(
     trControl = ctrl,
     tuneGrid = expand.grid(C=c(0.05,0.1,0.2,0.3), sigma=c(0.001,0.005,0.01,0.015))
 )
-save(svmFit,file = 'svmFit')
 
+save(svmFit, file = 'svmFit')
+
+```
+
+```{r}
+svmFit
+```
+
+```{r}
+plot(svmFit)
+densityplot(svmFit, pch='|')
+predict(svmFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+# Compare the Models
+
+```{r}
+re <-
+  resamples(x = list(
+    knn = knnFit,
+    elastinet = glmnetFit,
+    svm = svmFit
+  ))
+
+```
+
+# Test Set Evaluation
+
+## Create test set
+
+```{r}
+
+test.imp <- test.raw
+
+#lakghd
+test.imp$SEX <- as.factor(test.imp$SEX)
+test.imp$EDUCATION <- as.factor(test.imp$EDUCATION)
+test.imp$MARRIAGE <- as.factor(test.imp$MARRIAGE)
+
+map_int(test.imp,~sum(is.na(.x)))
+
+round(prop.table(table(test.imp$default)),2)
+
+test.imp <- test.imp[complete.cases(test.imp), ]
 ```
 
 

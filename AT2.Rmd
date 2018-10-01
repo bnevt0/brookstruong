@@ -48,7 +48,7 @@ summary(train.raw)
 
 Looking at the dataset and how the `read_csv` imported the csv, we can understand that the date is imported as a <chr> string rather than <date>. 
 
-```{r Trainset, echo=TRUE}
+```{r, echo=TRUE}
 train.raw %>%
   arrange(AGE>80) %>%
   ggplot(aes(x=AGE)) + geom_histogram() 
@@ -79,7 +79,6 @@ corrplot(M,
          insig ="blank",
          mar=c(0,0,3,0))
 
-corrplot(M, method = "color")
 ```
 
 ```{r}
@@ -145,7 +144,7 @@ First step is to look at all variables available using the `ggplot2` framework f
 
 #### Continuous Variables
 
-1. `LIMIT_BAL`
+1. `LIMIT_BAL` The limit Balance beings at -99 with a median of 140,000, mean of 167880 and max of 1,000,000.
 2. `AGE` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
 
 ```{r}
@@ -158,6 +157,123 @@ p2 <- ggplot(data=train.raw, aes(x=AGE)) +
 grid.arrange(p1,p2, nrow=1)
 ```
 
+```{r}
+p3 <- ggplot(data=train.raw, aes(x=PAY_PC1)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p4 <- ggplot(data=train.raw, aes(x=PAY_PC2)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p5 <- ggplot(data=train.raw, aes(x=PAY_PC3)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p3,p4,p5, nrow=1)
+```
+
+
+```{r}
+p6 <- ggplot(data=train.raw, aes(x=AMT_PC1)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p7 <- ggplot(data=train.raw, aes(x=AMT_PC2)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p8 <- ggplot(data=train.raw, aes(x=AMT_PC3)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p9 <- ggplot(data=train.raw, aes(x=AMT_PC4)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p10 <- ggplot(data=train.raw, aes(x=AMT_PC5)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p11 <- ggplot(data=train.raw, aes(x=AMT_PC6)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p12 <- ggplot(data=train.raw, aes(x=AMT_PC7)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p6,p7,p8,p9,p10,p11,p12, nrow=2)
+```
+#### Categorical Variables
+
+1. `SEX` The limit Balance beings at -99 with a median of 140,000, mean of 167880 and max of 1,000,000.
+2. `EDUCATION` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+2. `MARRIAGE` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+
+```{r}
+
+get_legend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+p <- lapply(X = c('SEX', 'EDUCATION', 'MARRIAGE'),
+            FUN = function(x) ggplot(data = train.raw) +
+              aes_string(x=x, fill = 'default') +
+              geom_bar(position="dodge") +
+              theme(legend.position="none"))
+legend <- get_legend(ggplot(data = train.raw, aes(x=SEX, fill = default)) +
+                       geom_bar())
+
+grid.arrange(p[[1]],p[[2]],p[[3]],
+             legend, layout_matrix = cbind(c(1,2,3),
+                                           c(4,5,3),
+                                           c(6,6,6)),
+             widths=c(3,3,1))
+
+```
+
+***
+## Data Preparation
+
+### Missing Values Imputation
+```{r}
+summary(train.raw$SEX)
+
+#train.imp <- train.raw
+#train.imp$SEX[is.na(train.imp$SEX)] <- '3'
+
+#what to do with the 2 NAs?'
+
+
+```
+
+## Modeling
+1. xgboost,
+2. glmnet,
+3. Avg NN
+
+### Extreme Gradient Boosting
+
+
+
+#ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = #twoClassSummary,
+                     # sampling = 'down',
+                     savePredictions = T
+                     )
+xgbGrid <- expand.grid(
+  nrounds = seq(14,24,2),
+  max_depth = seq(2,8,2),
+  eta=c(0.1,0.2,0.3),
+  gamma=1,
+  colsample_bytree=1,
+  min_child_weight=1,
+  subsample=1
+)
+
+#xgbFit <- train(
+  default~.,
+  train.imp,
+  method = 'xgbTree',
+  trcontrol = ctrl,
+  tuneGrid = xgbGrid
+)
 
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

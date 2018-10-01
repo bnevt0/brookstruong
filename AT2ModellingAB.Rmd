@@ -1,0 +1,91 @@
+---
+title: "AT2 Modelling by AB"
+author: "Alex Brooks"
+date: "29 September 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(dplyr)
+```
+
+# Start modelling
+
+EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
+
+```{r}
+#Import the data
+credit_training <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+credit_test <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+summary(credit_training)
+str(credit_training)
+```
+##Clean the data based on observations
+
+```{r}
+#need to change ID to be "character", so the IDs are not counted as numbers
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex, call it new_sex and change the animal classifications to 0
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+  #clean age to remove aged over 100 entries will become NA
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  
+  output$SEX <- as.factor(output$SEX)
+  output$EDUCATION <- as.factor(output$EDUCATION)
+  output$MARRIAGE <- as.factor(output$MARRIAGE)
+  
+  return(output)
+  }
+
+credit_train_clean <- clean_data(credit_training)
+credit_test_clean <- clean_data(credit_test)
+
+str(credit_train_clean)
+str(credit_test_clean)
+```
+Run a linear model with the training data.
+
+```{r}
+
+train_data <- credit_train_clean
+
+#We run a linear regression model on our training set  
+glm.model = glm(formula = default ~ ., family = binomial, data = train_data[,-1])
+
+summary(glm.model)
+
+```
+##
+Most important predictors are Limit balance, Pay_PC variables and the first two AMT variables.
+
+```{r}
+# Now to predict probabilities on our test data
+glm_prob <- predict.glm(glm.model,lrm_data[,-1],type="response")
+
+# Create a vector to hold predictions
+glm_predict <- rep(0,nrow(lrm_data[,-1]))
+glm_predict[glm_prob>.5] <- 1
+
+#Create a confusion matrix
+glm_confusion_matrix <- table(pred=glm_predict,true=lrm_data$Target)
+
+glm_confusion_matrix
+```
+
+#Need to investigate Principal Components
+Need to understand how the transformations occured and what they mean. It's a method to reduce the number of components - a maths procedure to transform correlated variables into uncorrelated variables called Principal Component. The FIRST PC accounts for as much variability as possible.
+PCA reduces attribute space to a large number of variables. It's a dimensionality of reduction data compression method. The goal is dimension reduction, but there is no guarantee the results are interpretable. Hence, take the EDA with a grain of salt not the mix of numbers and the negatives - hard to see what it really 'means'
+Based on the original variable having the highest correlation with the principal component.
+

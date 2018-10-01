@@ -175,7 +175,6 @@ boost.cv <- xgb.cv(params = param,
 
 #Of the 200 rounds, which had the best area under the curve. Use that as nrounds
 max.auc = which.max(boost.cv$evaluation_log[, test_auc_mean]) 
-max.auc.idx
 
 boost.model <- xgb.train(params = param,
                          data = dtrain,
@@ -250,7 +249,6 @@ final.boost.cv <- xgb.cv(params = param,
 
 #Of the 200 rounds, which had the best area under the curve. Use that as nrounds
 final.max.auc = which.max(final.boost.cv$evaluation_log[, test_auc_mean]) 
-max.auc.idx
 
 final.boost.model <- xgb.train(params = param,
                          data = final.dtrain,

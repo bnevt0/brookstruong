@@ -11,18 +11,20 @@ library(tidyverse)
 library(ggplot2)
 library(caret)
 library(dplyr)
+library(ROCR)
+library(glmnet)
 ```
 
 # Start modelling
 
 EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
 
+IF we dont't have a test set with the default, we can't see how accurate it is
+
 ```{r}
 #Import the data
 credit_training <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
 credit_test <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
-summary(credit_training)
-str(credit_training)
 ```
 ##Clean the data based on observations
 
@@ -42,50 +44,266 @@ clean_data <- function(dataSet) {
   #clean age to remove aged over 100 entries will become NA
   output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
   
-  output$SEX <- as.factor(output$SEX)
-  output$EDUCATION <- as.factor(output$EDUCATION)
-  output$MARRIAGE <- as.factor(output$MARRIAGE)
+  #removed these factors from modelling to make them integers
+  #output$SEX <- as.factor(output$SEX)
+ #output$EDUCATION <- as.factor(output$EDUCATION)
+  #output$MARRIAGE <- as.factor(output$MARRIAGE)
   
   return(output)
-  }
+}
+```
 
+```{r}
 credit_train_clean <- clean_data(credit_training)
 credit_test_clean <- clean_data(credit_test)
 
 str(credit_train_clean)
 str(credit_test_clean)
+#note test data has no default, so we need to do a split of our train data
 ```
 Run a linear model with the training data.
+First, split the training data into a test and train (as the test data supplied has no default)
+```{r test_train}
+
+# Description
+# -----------
+# Split data into random train and test sets, then add them back to a single dataframe.
+# A new column called 'is_train' indicats whether a row belongs to the training set (1) or test set (0)
+
+# Parameters
+# ----------
+  # dataSet (dataframe) - data frame of data with test and train split
+
+# Returns - a data frame
+
+train_test_set <- function(dataSet, split) {
+  
+  trainset_size = floor(split * nrow(dataSet))
+  
+  set.seed(333)
+  
+  #this is via randomly picking observations using the sample function
+  trainset_indices = sample(seq_len(nrow(dataSet)), size = trainset_size)
+  
+  #assign observations to training and testing sets
+  trainset = dataSet[trainset_indices, ]
+  testset = dataSet[-trainset_indices, ]
+  
+  #Add a column to each data frame called 'is_train'. for training set, set it to 1, for test set, set it to 0.
+  trainset$is_train = 1
+  testset$is_train = 0
+  
+  #Bind the 2 data frames back together
+  output = rbind(trainset,testset)
+  
+  return(output)
+  
+}
+```
 
 ```{r}
-
-train_data <- credit_train_clean
-
+# done an 80:20 split on our training data (80% is train values)
+credit_train_clean_for_GLM <- train_test_set(credit_train_clean, 0.8)
+```
+Only want the stuff that is an 'is train' value of 1 - because I only want the training data of the trainset
+ 
+```{r}
+glm_test_set <- filter(credit_train_clean_for_GLM, is_train==0)
+glm_train_set <- filter(credit_train_clean_for_GLM, is_train==1)
 #We run a linear regression model on our training set  
-glm.model = glm(formula = default ~ ., family = binomial, data = train_data[,-1])
+glm.model = glm(formula = default ~ ., family = binomial, data = glm_train_set[,-1])
 
 summary(glm.model)
-
 ```
 ##
-Most important predictors are Limit balance, Pay_PC variables and the first two AMT variables.
+Summary says most important predictors are Limit balance, Education, Age, Pay and Amt variables.
+Analyse the predictors and determine which ones are the valid ones to keep (feature selection).
 
 ```{r}
-# Now to predict probabilities on our test data
-glm_prob <- predict.glm(glm.model,lrm_data[,-1],type="response")
-
+# probabilities on our test data that's been split from our training IE not the provided test
+probabilities <- predict.glm(glm.model,glm_test_set[,-1],type="response")
 # Create a vector to hold predictions
-glm_predict <- rep(0,nrow(lrm_data[,-1]))
-glm_predict[glm_prob>.5] <- 1
-
+predictions <- rep("N",nrow(glm_test_set[,-1])) 
+predictions[probabilities >.5] <- "Y" #turned it from a probability to a prediction
 #Create a confusion matrix
-glm_confusion_matrix <- table(pred=glm_predict,true=lrm_data$Target)
+glm_confusion_matrix <- table(pred=predictions,true=glm_test_set$default)
 
 glm_confusion_matrix
 ```
 
-#Need to investigate Principal Components
-Need to understand how the transformations occured and what they mean. It's a method to reduce the number of components - a maths procedure to transform correlated variables into uncorrelated variables called Principal Component. The FIRST PC accounts for as much variability as possible.
-PCA reduces attribute space to a large number of variables. It's a dimensionality of reduction data compression method. The goal is dimension reduction, but there is no guarantee the results are interpretable. Hence, take the EDA with a grain of salt not the mix of numbers and the negatives - hard to see what it really 'means'
-Based on the original variable having the highest correlation with the principal component.
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
 
+```{r}
+#converted CM to dataframe extracted the frequency values for each score
+glm_confusion_matrix_df <- as.data.frame(glm_confusion_matrix)
+glm_tn <- glm_confusion_matrix_df$Freq[1]
+glm_fp <- glm_confusion_matrix_df$Freq[2]
+glm_fn <- glm_confusion_matrix_df$Freq[3]
+glm_tp <- glm_confusion_matrix_df$Freq[4]
+glm_evaluation_measures <- get_evaluation_measures("model_train", glm_tn, glm_fp, glm_fn, glm_tp)
+#glm_evaluation_measures now holds a dataframe showing accuracy, precision, recall and F1
+glm_evaluation_measures
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+```{r}
+glm_evaluation_measures$AUC <- get_auc(probabilities, glm_test_set$default)
+glm_evaluation_measures
+```
+#This isn't very good. Shall we try Lasso 
+```{r}
+#Now we want to try LASSO to perform grid search to find optimal value of lambda IE regularize the model
+#removing NAs
+credit_train_clean_for_lasso = credit_train_clean[complete.cases(credit_train_clean), ]
+
+# done an 80:20 split on our training data (80% is train values)
+credit_train_clean_for_lasso <- train_test_set(credit_train_clean_for_lasso, 0.8)
+```
+
+```{r}
+#create test and train set dataframes
+lrm_testset <- filter(credit_train_clean_for_lasso, is_train==0)
+lrm_trainset <- filter(credit_train_clean_for_lasso, is_train==1)
+#convert training data to matrix format
+lrm_x <- model.matrix(default~., lrm_trainset[,-1])
+lrm_y <- lrm_trainset$default
+
+#family= binomial => logistic regression, alpha=1 => lasso
+lrm_cv.out <- cv.glmnet(lrm_x, lrm_y, alpha=1, family="binomial", type.measure="auc")
+
+plot(lrm_cv.out)
+
+```
+
+```{r}
+#Using lambda of 1se rather than the minimum lambda, see what predictors are discarded
+
+#min value of lambda
+lrm_lambda_min <- lrm_cv.out$lambda.min
+#best value of lambda
+lrm_lambda_1se <- lrm_cv.out$lambda.1se
+
+#regression coefficients
+coef(lrm_cv.out,s=lrm_lambda_1se)
+
+```
+#The pay variables are selected again, along with limit balance and education.
+
+```{r}
+#Convert test data to a model matrix
+lrm_x_test <- model.matrix(default~.,lrm_testset[,-1])
+
+#Get prediction probabilities
+lasso_prob <- predict(lrm_cv.out, newx = lrm_x_test, s=lrm_lambda_1se, type="response")
+
+#translate probabilities to predictions
+lasso_predict <- rep("N",nrow(lrm_testset))
+
+lasso_predict[lasso_prob>.5] <- "Y"
+
+```
+
+###2.a. Show the confusion matrix and calculate precision, recall, F1 and AUC
+
+```{r}
+#confusion matrix
+lasso_confusion_matrix <- table(pred=lasso_predict,true=lrm_testset$default)
+
+lasso_confusion_matrix
+
+```
+
+```{r}
+#Convert the confusion matrix to a data frame
+lasso_confusion_matrix_df <- as.data.frame(lasso_confusion_matrix)
+  
+lasso_evaluation_measures <- get_evaluation_measures("Lasso",
+                        lasso_confusion_matrix_df$Freq[1],
+                        lasso_confusion_matrix_df$Freq[2],
+                        lasso_confusion_matrix_df$Freq[3],
+                        lasso_confusion_matrix_df$Freq[4])
+
+#Get the AUC and add it to our evaluation measures data frame
+lasso_evaluation_measures$AUC <- get_auc(lasso_prob, lrm_testset$default)
+
+lasso_evaluation_measures
+
+```
+```{r}
+evaluation_measures <- rbind(lasso_evaluation_measures, glm_evaluation_measures)
+evaluation_measures
+```
+## LASSO result is worse than trained model - overfitting?
+Try another glm with different variables
+```{r}
+#We run a linear regression model selecting new features 
+glm.model2 = glm(formula = default ~ LIMIT_BAL+EDUCATION+AGE+PAY_PC1+PAY_PC2+PAY_PC3+AMT_PC1+AMT_PC2, family = binomial, data = glm_train_set[,-1])
+
+summary(glm.model2)
+```
+ 
+
+```{r}
+# probabilities on our test data that's been split from our training IE not the provided test
+probabilities2 <- predict.glm(glm.model2,glm_test_set[,-1],type="response")
+# Create a vector to hold predictions
+predictions2 <- rep("N",nrow(glm_test_set[,-1])) 
+predictions2[probabilities2 >.5] <- "Y" #turned it from a probability to a prediction
+#Create a confusion matrix
+glm_confusion_matrix2 <- table(pred=predictions2,true=glm_test_set$default)
+
+glm_confusion_matrix2
+```
+```{r}
+#converted CM to dataframe extracted the frequency values for each score
+glm_confusion_matrix2_df <- as.data.frame(glm_confusion_matrix2)
+glm2_tn <- glm_confusion_matrix2_df$Freq[1]
+glm2_fp <- glm_confusion_matrix2_df$Freq[2]
+glm2_fn <- glm_confusion_matrix2_df$Freq[3]
+glm2_tp <- glm_confusion_matrix2_df$Freq[4]
+glm_evaluation_measures2 <- get_evaluation_measures("model_train2", glm2_tn, glm2_fp, glm2_fn, glm2_tp)
+#glm_evaluation_measures now holds a dataframe showing accuracy, precision, recall and F1
+```
+
+
+```{r}
+glm_evaluation_measures2$AUC <- get_auc(probabilities2, glm_test_set$default)
+```
+
+```{r}
+evaluation_measures <- rbind(evaluation_measures, glm_evaluation_measures2)
+evaluation_measures
+```

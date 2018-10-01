@@ -1,0 +1,159 @@
+---
+title: "AT2 Modelling by AB"
+author: "Alex Brooks"
+date: "29 September 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, error=FALSE, message=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse, quietly = T)
+library(ggplot2, quietly = T)
+library(caret, quietly = T)
+library(dplyr, quietly = T)
+library(ROCR, quietly = T)
+library(randomForest)
+```
+
+# Start modelling
+
+EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
+
+```{r}
+#Import the data
+training.raw <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+predict.raw <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+```
+##Clean the data based on observations
+
+```{r}
+#need to change ID to be "character", so the IDs are not counted as numbers
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex, call it new_sex and change the animal classifications to 0
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+  
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  
+  #clean age to remove aged over 100 entries will become NA
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  
+  #removed these factors from modelling to make them integers
+  output$SEX <- as.factor(output$SEX)
+  output$EDUCATION <- as.factor(output$EDUCATION)
+  output$MARRIAGE <- as.factor(output$MARRIAGE)
+
+  return(output)
+  
+}
+```
+
+Create some standard functions for measuring evaulation criteria
+
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+Clean our training data
+```{r}
+training.clean <- clean_data(training.raw)
+```
+
+Get train and test sets
+```{r}
+training.clean = training.clean[complete.cases(training.clean), ]
+
+trainset.size <- floor(0.80 * nrow(training.clean))
+
+target.col <- grep("default",names(training.clean))
+
+#set random seed 
+set.seed(42)
+
+trainset.indices <- sample(seq_len(nrow(training.clean[,-1])), size = trainset.size)
+
+#assign observations to training and testing sets
+train.set <- training.clean[trainset.indices, ]
+test.set <- training.clean[-trainset.indices, ]
+
+```
+
+##Try a random forest model
+
+```{r}
+
+#Build random forest model
+rf.model <- randomForest(default ~ .,
+                         data = train.set,
+                         importance = TRUE,
+                         xtest = test.set[,-target.col],
+                         keep.forest = TRUE,
+                         ntree = 1000)
+
+#predictions for test set
+rf.pred <- data.frame(test.set, rf.model$test$predicted)
+
+#confusion matrix
+rf.cm <- table(pred = rf.model$test$predicted, true = test.set[,target.col])
+
+rf.cm
+
+```
+
+
+```{r}
+
+rf.cm.df <- as.data.frame(rf.cm)
+
+rf.eval <- get_evaluation_measures("Random Forest",
+                                   rf.cm.df$Freq[1],
+                                   rf.cm.df$Freq[2],
+                                   rf.cm.df$Freq[3],
+                                   rf.cm.df$Freq[4])
+
+#Get the AUC and add it to our evaluation measures data frame
+rf.eval$AUC <- get_auc(rf.model$test$votes[,2], test.set[,target.col])
+
+rf.eval
+
+```

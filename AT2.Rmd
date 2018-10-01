@@ -18,45 +18,38 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Read in the dataset
 
 ```{r Read in the dataset, error=FALSE, message=FALSE, warning = FALSE}
-library(RCurl, quietly = T)
 library(tidyverse, quietly = T)
 library(dplyr, quietly = T)      #used by Caret
 library(ggplot2, quietly = T)
 library(corrplot, quietly =T)
-
-readData <- function(path.name, file.name, column.types, missing.types) {
-  gurl <- paste(path.name,file.name, sep="")
-  download.file(gurl,file.name,method="curl", quiet =T)
-  tbl_df(read.csv(file.name,colClasses = column.types,na.strings=missing.types))
-}
-
-
+library(caret, quietly = T)
+library(Amelia, quietly = T)
+library(gridExtra, quietly = T)
 
 setwd("~/Documents/brookstruong")
 
-import_train <- read_csv("AT2_credit_train_STUDENT.csv")
-
+train.raw <- read_csv("AT2_credit_train_STUDENT.csv")
+test.raw <- read_csv("AT2_credit_test_STUDENT.csv")
 
 ```
 
 23,101 observations over 17 variables
 
 ```{r Trainset, echo=TRUE}
-glimpse(import_train)
+glimpse(train.raw)
 
-import_train$default <- as.factor(import_train$default)
-import_train$SEX <- as.factor(import_train$SEX)
-import_train$EDUCATION <- as.factor(import_train$EDUCATION)
-import_train$MARRIAGE <- as.factor(import_train$MARRIAGE)
+train.raw$default <- as.factor(train.raw$default)
+train.raw$SEX <- as.factor(train.raw$SEX)
+train.raw$EDUCATION <- as.factor(train.raw$EDUCATION)
+train.raw$MARRIAGE <- as.factor(train.raw$MARRIAGE)
 
+summary(train.raw)
 ```
 
 Looking at the dataset and how the `read_csv` imported the csv, we can understand that the date is imported as a <chr> string rather than <date>. 
 
 ```{r Trainset, echo=TRUE}
-summary(import_train)
-
-import_train %>%
+train.raw %>%
   arrange(AGE>80) %>%
   ggplot(aes(x=AGE)) + geom_histogram() 
 
@@ -67,7 +60,7 @@ ggplot
 Missing data = 3NA for sex.
 
 ```{r Correlation Plot}
-cplot <- import_train %>%
+cplot <- train.raw %>%
   select(-default) %>%
   select_if(is.numeric)
 
@@ -89,9 +82,82 @@ corrplot(M,
 corrplot(M, method = "color")
 ```
 
+```{r}
+train.raw %>%
+  filter(SEX == "NA")
+
+```
+
+## Train-Test Split
+
+```{r Train-Test Split, echo=TRUE}
+set.seed(42)
+training_rows <- createDataPartition(y = train.raw$default, p=0.7, list=F)
+
+test.raw <- train.raw %>% filter(!(rownames(.) %in% training_rows))
+train.raw <- train.raw %>% filter(rownames(.) %in% training_rows)
+dim(train.raw)
+
+```
 
 ```{r pressure, echo=FALSE}
-plot(pressure)
+dim(test.raw)
 ```
+
+## Missing values analysis
+
+```{r}
+
+missmap(train.raw, main='Missing Values Analysis using Amelia ordered by % missing', col=c('red', 'gray'), legend =F, rank.order = T)
+
+
+```
+
+```{r}
+
+map_int(train.raw,~sum(is.na(.x)))
+
+
+```
+
+Sex is missing 2 values. 
+
+## EDA
+
+`default` is the response variable. The response variable is a Yes/No boolean variable therefor is appropriate for our classification problem. 
+
+```{r}
+
+round(prop.table(table(train.raw$default)),2)
+
+
+```
+
+76% of the dataset do not default and 24% have defaulted.
+
+***
+
+## Predictor Variables
+
+### Univariate & Bivariate
+
+First step is to look at all variables available using the `ggplot2` framework for visuals.
+
+#### Continuous Variables
+
+1. `LIMIT_BAL`
+2. `AGE` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+
+```{r}
+p1 <- ggplot(data=train.raw, aes(x=LIMIT_BAL)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p2 <- ggplot(data=train.raw, aes(x=AGE)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p1,p2, nrow=1)
+```
+
+
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

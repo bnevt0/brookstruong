@@ -25,6 +25,7 @@ library(corrplot, quietly =T)
 library(caret, quietly = T)
 library(Amelia, quietly = T)
 library(gridExtra, quietly = T)
+library(xgboost, quietly = T)
 
 setwd("~/Documents/brookstruong")
 
@@ -237,7 +238,7 @@ summary(train.raw$SEX)
 
 #what to do with the 2 NAs?'
 
-
+train.imp <- train.imp[complete.cases(train.imp), ]
 ```
 
 ## Modeling
@@ -248,12 +249,12 @@ summary(train.raw$SEX)
 ### Extreme Gradient Boosting
 
 
-
-#ctrl <- trainControl(method = "repeatedcv",
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
                      repeats = 5,
                      verboseIter = F,
                      classProbs = TRUE,
-                     summaryFunction = #twoClassSummary,
+                     summaryFunction = twoClassSummary,
                      # sampling = 'down',
                      savePredictions = T
                      )
@@ -267,7 +268,7 @@ xgbGrid <- expand.grid(
   subsample=1
 )
 
-#xgbFit <- train(
+xgbFit <- train(
   default~.,
   train.imp,
   method = 'xgbTree',
@@ -275,5 +276,100 @@ xgbGrid <- expand.grid(
   tuneGrid = xgbGrid
 )
 
+save(xgbFit, file = 'xgbFit')
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```
+
+
+```{r}
+print(xgbFit, details=F)
+
+```
+
+```{r}
+plot(xgbFit)
+
+'xgb.importance(feature_names = colnames(train.imp),
+               model = xgbFit$finalModel) %>%
+  xgb.ggplot.importance()' #gotta fix this.
+
+densityplot(xgbFit,pch='|')
+predict(xgbFit,type = 'prob') -> train.Probs
+histogram(~Y + N, train.Probs)
+```
+
+## Elastinet
+
+mixture of ridge & lasso
+
+```{r}
+
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+glmnetGrid <- expand.grid(.alpha = c(0,.2,.4,.6,.8,1),
+                          .lambda = seq(10^-10,10^-1,0.02))
+glmnetFit <- train(
+    default~.,
+    train.imp,
+    trControl=ctrl,
+    method='glmnet',
+    tuneGrid = glmnetGrid
+)
+save(glmnetFit,file = 'glmnetFit')
+
+```
+
+
+```{r}
+glmnetFit
+
+```
+
+```{r}
+glmnplot <- plot(glmnetFit,
+                 plotType = 'level',
+                 cuts = 15,
+                 scales = list(x=list(rot = 90, cex = 0.65)))
+
+update (glmnplot,
+        xlab = "Mixing Percentage\nRidge <------------> Lasso",
+        sub = "",
+        main = "Area Under the ROC Curve",
+        ylab = "Amount of Regularization")
+
+densityplot(glmnetFit, pch='|')
+plot(varImp(glmnetFit),15,main='Elastinet Model')
+predict(glmnetFit, type = 'prob') -> train.glmnet.Probs
+histogram(~Y + N, train.glmnet.Probs)
+```
+
+## K-NN
+Supposed to be the worst.
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+knnGrid <- expand.grid(k=seq(3,23,2))
+knnFit <- train(
+    default~.,
+    train.imp,
+    method = 'knn',
+    trControl = ctrl,
+    tuneGrid = knnGrid
+)
+
+
+
+```

@@ -1,0 +1,271 @@
+---
+title: "AT2 Modelling by AB"
+author: "Alex Brooks"
+date: "29 September 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, error=FALSE, message=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr, quietly = T)
+library(ROCR, quietly = T)
+library(caret)
+library(xgboost, quietly = T)
+library(Matrix)
+```
+
+# Start modelling
+
+EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
+
+```{r}
+#Import the data
+training.raw <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+predict.raw <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+```
+##Clean the data based on new observations to make train and test the same
+
+```{r data_clean}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Cleaned ID into character, Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables. See explanation in markdown if you want to know more.
+#also removed previously coded factors of marriage, sex and education
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex to remove the animal classifications 
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+  #clean age to remove aged over 100 entries and make them NA first
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+  output$AGE[is.na(output$AGE)] <- round(mean(output$AGE[!is.na(output$AGE)]))
+
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
+  
+  return(output)
+}
+```
+
+Create some standard functions for measuring evaulation criteria
+
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+Clean our training data
+```{r}
+training.clean <- clean_data(training.raw)
+
+#Get data into the correct state
+
+training.clean = training.clean[complete.cases(training.clean), ] #Remove rows with NAs
+training.clean$default <- as.character(training.clean$default) #Set as characters so we can change to 0 and 1
+training.clean$default[training.clean$default == "N"] = 0 #Set N to 0 and Y to 1
+training.clean$default[training.clean$default == "Y"] = 1 #Set Y to 1
+training.clean$default <- as.factor(training.clean$default)
+
+```
+
+Now to try XG boost
+
+```{r}
+#create test and train sets
+set.seed(42)
+
+training.rows <- createDataPartition(y = training.clean$default, p=0.8, list=F)
+
+test.set <- training.clean %>% filter(!(rownames(.) %in% training.rows))
+train.set <- training.clean %>% filter(rownames(.) %in% training.rows)
+
+train.labels = train.set[, "default"]
+test.labels = test.set[, "default"]
+
+train.set$default = NULL
+test.set$default = NULL
+
+# convert data to matrix
+train.matrix = as.matrix(train.set[,-1])
+mode(train.matrix) = "numeric"
+
+test.matrix = as.matrix(test.set[,-1])
+mode(test.matrix) = "numeric"
+
+# convert labels from factor to numeric matrix
+train.labels = as.matrix(as.integer(train.labels)-1)
+test.labels = as.matrix(as.integer(test.labels)-1)
+
+#Create xgbMatrix
+dtrain <- xgb.DMatrix(data = train.matrix, label=train.labels)
+dtest <- xgb.DMatrix(data = test.matrix, label=test.labels)
+
+#Parameters for model
+param <- list("objective" = "binary:logistic",    # multiclass classification 
+              "eval_metric" = "auc",    # evaluation metric
+              "max_depth" = 7,    # maximum depth of tree 
+              "eta" = 0.3,    # step size shrinkage 
+              "gamma" = 0,    # minimum loss reduction 
+              "subsample" = 1,    # part of data instances to grow tree 
+              "colsample_bytree" = 1,  # subsample ratio of columns when constructing each tree 
+              "min_child_weight" = 6,  # minimum sum of instance weight needed in a child
+              "verbose" = 0
+              )
+```
+
+```{r}
+# set random seed, for reproducibility 
+#set.seed(1234)
+# k-fold cross validation, with timing
+#nround.cv = 200
+#bst.cv <- xgb.cv(param=param, data=train.matrix, label=y,nfold=4, nrounds=nround.cv, prediction=TRUE, verbose=FALSE)
+
+watchlist <- list(train = dtrain, test = dtest)
+
+boost.cv <- xgb.cv(params = param,
+                   data = dtrain,
+                   nfold = 4,
+                   nround = 30,
+                   early_stopping_rounds = 30,
+                   label = train.labels,
+                   watchlist = watchlist,
+                   prediction = TRUE)
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+max.auc = which.max(boost.cv$evaluation_log[, test_auc_mean]) 
+
+boost.model <- xgb.train(params = param,
+                         data = dtrain,
+                         nrounds = max.auc,
+                         watchlist = watchlist)
+
+boost.prob <- predict(boost.model, dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+boost.predictions <- rep(0,nrow(test.set[,-1]))
+boost.predictions[boost.prob >.5] <- 1
+
+#Create a confusion matrix
+boost.cm <- table(pred=boost.predictions, true=test.labels)
+
+#converted CM to dataframe extracted the frequency values for each score
+boost.df <- as.data.frame(boost.cm)
+
+#Calculate our evaluation measures and place them in a data frame
+boost.eval <- get_evaluation_measures("XGBoost",
+                                         boost.df$Freq[1],
+                                         boost.df$Freq[2],
+                                         boost.df$Freq[3],
+                                         boost.df$Freq[4])
+
+
+boost.eval$AUC <- get_auc(boost.prob, test.labels)
+
+boost.eval
+
+```
+
+
+
+```{r}
+#Load the vaidation set
+#NOTE:this validation set needed an ID added (hence the CORRECTED in the file name)
+predict.raw <- read.csv("AT2_credit_test_STUDENT.csv")
+
+#Train set is the full repurchase training set after cleaning for the tree models
+final.train.set <- training.clean
+final.test.set <- clean_data(predict.raw)
+
+final.train.labels = final.train.set[, "default"]
+
+final.train.set$default = NULL
+
+# convert data to matrix
+final.train.matrix = as.matrix(final.train.set[,-1])
+mode(final.train.matrix) = "numeric"
+
+final.test.matrix = as.matrix(final.test.set[,-1])
+mode(final.test.matrix) = "numeric"
+
+# convert labels from factor to numeric matrix
+final.train.labels = as.matrix(as.integer(final.train.labels)-1)
+
+#Create xgbMatrix
+final.dtrain <- xgb.DMatrix(data = final.train.matrix, label=final.train.labels)
+final.dtest <- xgb.DMatrix(data = final.test.matrix)
+```
+
+```{r}
+
+final.boost.cv <- xgb.cv(params = param,
+                   data = final.dtrain,
+                   nfold = 4,
+                   nround = 200,
+                   early_stopping_rounds = 30,
+                   label = final.train.labels,
+                   prediction = TRUE,
+                   sampling = "down")
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+final.max.auc = which.max(final.boost.cv$evaluation_log[, test_auc_mean]) 
+
+final.boost.model <- xgb.train(params = param,
+                         data = final.dtrain,
+                         nrounds = max.auc)
+
+final.boost.prob <- predict(final.boost.model, final.dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+final.boost.predictions <- rep(0,nrow(final.test.set[,-1]))
+final.boost.predictions[final.boost.prob >.5] <- 1
+
+#predictions for test set
+final.test.set$default <- final.boost.predictions
+
+final.output <- final.test.set %>%
+    select(ID, default)
+
+write.csv(final.output, file="predictions/xgb_resultsDS.csv", row.names=FALSE)
+
+```
+

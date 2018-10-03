@@ -162,10 +162,9 @@ rf.eval
 
 ```{r}
 #Load the vaidation set
-#NOTE:this validation set needed an ID added (hence the CORRECTED in the file name)
 testset <- read.csv("AT2_credit_test_STUDENT.csv")
 
-#Train set is the full repurchase training set after cleaning for the tree models
+#Train set is the full training set after cleaning for the tree models
 final.trainset <- training.clean
 
 str(final.trainset)

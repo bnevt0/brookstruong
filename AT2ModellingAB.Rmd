@@ -304,6 +304,39 @@ glm_evaluation_measures2$AUC <- get_auc(probabilities2, glm_test_set$default)
 ```
 
 ```{r}
-evaluation_measures <- rbind(evaluation_measures, glm_evaluation_measures2)
+evaluation_measures <- rbind(glm_evaluation_measures, glm_evaluation_measures2)
 evaluation_measures
+```
+## create predictions for upload
+Model_train is the better model than the second, so upload that one
+```{r}
+#Load the vaidation set
+testset <- read.csv("AT2_credit_test_STUDENT.csv")
+
+#Train set is the full training set after cleaning  
+final.trainset <- credit_test_clean
+
+str(final.trainset)
+
+#Test set
+final.testset <- clean_data(testset)
+
+str(final.testset)
+
+#Run the model (don't include ID, age or gender columns in the testset) #ASK ANT WHAT TO DO HERE!!
+validation.model <- glm(formula = default ~ ., 
+                              family = binomial, 
+                              data = final.trainset[,-1],)
+
+
+#predictions for test set
+final.testset$default <- validation.model$test$predicted
+
+final_output <- final.testset %>%
+    select(ID, default)
+
+final_output$default <- ifelse(final_output$default == "Y", 1, 0)
+
+write.csv(final_output, file="predictions/glm_results.csv", row.names=FALSE)
+
 ```

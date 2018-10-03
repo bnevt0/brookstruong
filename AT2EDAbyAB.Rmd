@@ -1,5 +1,5 @@
 ---
-title: "AT2EDAbyAB"
+title: "AT2 EDA byAB"
 author: "Alex Brooks"
 date: "29 September 2018"
 output: html_document
@@ -11,9 +11,13 @@ library(tidyverse)
 library(ggplot2)
 library(caret)
 library(dplyr)
+library(corrplot)
+options(scipen=999)
 ```
 
 # GOAL: create a model to predict which customers are likely to default on their credit car payments next month
+
+TO DO - clean up age to remove over 100 to impute as median, make test and train age, sex and marraige match
 
 EVALUATE THE MODEL: using AUC (area under the ROC curve) for binary classification models on the validation data.
 
@@ -37,12 +41,43 @@ Age, assumedly describes how old the card holder (ID) is. THIS NEEDS FIXING - WE
 We do not yet understand what PAY_PC cols are referring to, nor the AMT_PC
 Default would be the predictor or target variable, as this is what we are trying to determine.
 
+DATA CLEANING - remove the animal references, cos there is no 0 in the test set
+Limit balances in the training set, some are -99, which is non sensical
+Training has 0, 1 nd 2 for sex but test set has none
+
 ```{r}
+##OLD CLEANING FUNCTION
 #need to change ID to be "character", so the IDs are not counted as numbers
+
+## clean_data <- function(dataSet) {
+  
+  #clean up sex, call it new_sex and change the animal classifications to 0
+ # output <- dataSet
+  
+ # output$ID <- as.character(output$ID)
+  
+  #output$SEX <- as.integer(output$SEX)
+  
+  #output$SEX[output$SEX > 2] <- 0
+  #clean age to remove aged over 100 entries will become NA
+ # output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  
+ # output$SEX <- as.factor(output$SEX)
+  #output$EDUCATION <- as.factor(output$EDUCATION)
+  #output$MARRIAGE <- as.factor(output$MARRIAGE)
+  
+ # return(output)
+#}
+```
+New cleaning function with more recent clean up observations
+```{r data_clean}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Cleaned ID into character, Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables. See explanation in markdown if you want to know more.
+#also removed previously coded factors of marriage, sex and education
 
 clean_data <- function(dataSet) {
   
-  #clean up sex, call it new_sex and change the animal classifications to 0
+  #clean up sex to remove the animal classifications 
   output <- dataSet
   
   output$ID <- as.character(output$ID)
@@ -50,21 +85,35 @@ clean_data <- function(dataSet) {
   output$SEX <- as.integer(output$SEX)
   
   output$SEX[output$SEX > 2] <- 0
-  #clean age to remove aged over 100 entries will become NA
+  #clean age to remove aged over 100 entries and make them NA first
   output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
-  
-  output$SEX <- as.factor(output$SEX)
-  output$EDUCATION <- as.factor(output$EDUCATION)
-  output$MARRIAGE <- as.factor(output$MARRIAGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+  output$AGE[is.na(output$AGE)] <- round(mean(output$AGE[!is.na(output$AGE)]))
+
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
   
   return(output)
-  }
-
+}
+```
+Check the data again
+```{r}
+#clean both train and validation sets using function above
 credit_train_clean <- clean_data(credit_training)
 credit_test_clean <- clean_data(credit_test)
 
+#cleaned train
 str(credit_train_clean)
+```
+```{r}
+#clean test and check for consistency
 str(credit_test_clean)
+View(credit_test_clean)
+
 ```
 
 ```{r, fig.height=10, fig.width=12}
@@ -73,30 +122,82 @@ plot(credit_train_clean)
 ```{r, fig.height=10, fig.width=12}
 #check test and train are the same, with no imbalances
 plot(credit_test_clean)
+#check sex, limit balance and remove animals
 ```
 ## Let's see what we can see and dig in to do some EDA
+```{r, fig.width=12}
+#check correlation between variables on train
+#remove factors to run correlation plots on cor(credit_train_clean)
+#don't want ID- keep 2 - sex, education marriage or age
+removed <- credit_train_clean[,-c(1,3:5)]  
+removed <- removed[,-c(13)]
+corplot <-cor(removed)
+corrplot(corplot, method="pie") 
+```
 
+```{r, fig.width=12}
+#check correlation between variables on test - they seem to match train, so that's good
+#don't want ID- keep 2 - sex, education marriage or age
+removed <- credit_test_clean[,-c(1,3:5)]  
+removed <- removed[,-c(13)]
+corplot <-cor(removed)
+corrplot(corplot, method="pie") 
+```
+```{r}
+#let's count the number of defaults and non-defaults
+plot_data <- credit_train_clean %>% 
+  count(default, LIMIT_BAL)  
+
+
+ggplot(plot_data, aes(x = default, y = LIMIT_BAL, fill = default)) + 
+  geom_col(position = "fill")  
+```
 
 ```{r}
-#check distribution of education and limit balance against defaults
+#check distribution of education and limit balance against defaults on train
 #Education 1 = grad school, 2 = university, 3 = high school, 4 = others, 5 = unknown, 6 = unknown
 p <- ggplot(credit_train_clean, aes(EDUCATION, LIMIT_BAL))
 p + geom_boxplot(aes(colour=default),group = 1)+
-  labs(title = "Boxplot: Education vs Credit Card Limit Balance", subtitle = "Defaults in green", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")
+  labs(title = "Boxplot: Education vs Credit Card Limit Balance on train", subtitle = "Defaults in green", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")
+#People in the 0 education class have no defaults at all. 
+```
+
+```{r}
+#check distribution of education and limit balance against defaults on test
+#Education 1 = grad school, 2 = university, 3 = high school, 4 = others, 5 = unknown, 6 = unknown
+ptest <- ggplot(credit_test_clean, aes(EDUCATION, LIMIT_BAL))
+ptest + geom_boxplot(aes(),group = 1)+
+  labs(title = "Boxplot: Education vs Credit Card Limit Balance on test", subtitle = "Defaults in green", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")
 #People in the 0 education class have no defaults at all. 
 ```
 ```{r}
 #check distribution of marriage and limit balance against defaults
 p <- ggplot(credit_train_clean, aes(MARRIAGE, LIMIT_BAL))
 p + geom_boxplot(aes(colour=default),group = 1)+
-  labs(title = "Boxplot: Marriage Status vs Balance", subtitle = "Defaults in green", x = "0 = unknown, 1=married, 2=single, 3=others")
+  labs(title = "Boxplot: Marriage Status vs Balance on train", subtitle = "Defaults in green", x = "0 = unknown, 1=married, 2=single, 3=others")
 ```
+```{r}
+#check distribution of marriage and limit balance on test set
+ptest <- ggplot(credit_test_clean, aes(MARRIAGE, LIMIT_BAL))
+ptest + geom_boxplot(aes(),group = 1)+
+  labs(title = "Boxplot: Marriage Status vs Balance on test", subtitle = "Defaults in green", x = "0 = unknown, 1=married, 2=single, 3=others")
+```
+
 ```{r}
 #check distribution of sex and limit balance against defaults
 p <- ggplot(credit_train_clean, aes(SEX, LIMIT_BAL))
 p + geom_boxplot(aes(colour=default),group = 1)+
-  labs(title = "Boxplot: Sex vs Limit Balance", subtitle = "Defaults in green", x = "0=unknown, 1=male, 2=female")
+  labs(title = "Boxplot: Sex vs Limit Balance on train", subtitle = "Defaults in green", x = "0=unknown, 1=male, 2=female")
 ```
+```{r}
+#check distribution of sex and limit balance on test
+#THERE IS NO 0 IN THE TEST - NEED TO CLEAN OUT THE ZEROS
+p <- ggplot(credit_test_clean, aes(SEX, LIMIT_BAL))
+p + geom_boxplot(aes(),group = 1)+
+  labs(title = "Boxplot: Sex vs Limit Balance on test", subtitle = "Defaults in green", x = "0=unknown, 1=male, 2=female")
+```
+
+
 ##Some observations
 People with lower limit balances are more likely to be defaulters.
 
@@ -104,22 +205,49 @@ People with lower limit balances are more likely to be defaulters.
 #plotting sex, age and defaults
 ggplot(data = credit_train_clean) +
   geom_point(mapping = aes(x = AGE, y = SEX, color = default))+
-  labs(title = "Scatterplot: Sex, Age and Defaults", y = "0=unknown, 1=male, 2=female") 
+  labs(title = "Scatterplot: Sex, Age and Defaults on train", y = "0=unknown, 1=male, 2=female") 
 #so the animals were all defaults (three entries only)
 ```
+
 ```{r}
-#plotting education, limit balance and defauults
+#plotting sex, age and defaults on test - we need to remove the zeros
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = AGE, y = SEX))+
+  labs(title = "Scatterplot: Sex, Age on test", y = "0=unknown, 1=male, 2=female") 
+#so the animals were all defaults (three entries only)
+# go back and remove the zeros
+```
+```{r}
+#plotting education, limit balance and defaults
 ggplot(data = credit_train_clean) +
   geom_point(mapping = aes(x = EDUCATION, y = LIMIT_BAL, color = default))+
-  labs(title = "Scatterplot: Education, Limit Balance & Defaults", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown") 
+  labs(title = "Scatterplot: Education, Limit Balance & Defaults on train", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown") 
 ```
+
+```{r}
+#plotting education, limit balance on test
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = EDUCATION, y = LIMIT_BAL))+
+  labs(title = "Scatterplot: Education, Limit Balance on test", x = "0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown") 
+```
+
 ```{r}
 #plotting marriage, limit balance and defaults
 #marital 1 = married, 2 = single, 3 = others but what does 0 mean (not available?)?
 ggplot(data = credit_train_clean) +
   geom_point(mapping = aes(x = LIMIT_BAL, y = AGE, color = default))+
   facet_grid(~ MARRIAGE)+
-  labs(title = "Facet grid of Marital Status by Age and Defaults", subtitle = "Marital status codes: 0 = unknown, 1=married, 2=single, 3=others")+
+  labs(title = "Facet grid of Marital Status by Age and Defaults on train", subtitle = "Marital status codes: 0 = unknown, 1=married, 2=single, 3=others")+
+  theme(axis.text.x = element_text(angle=90, hjust = 1))
+ 
+```
+```{r}
+#plotting marriage, limit balance on test
+#marital 1 = married, 2 = single, 3 = others but what does 0 mean (not available?)?
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = LIMIT_BAL, y = AGE))+
+  facet_grid(~ MARRIAGE)+
+  labs(title = "Facet grid of Marital Status by Age and Defaults on test", subtitle = "Marital status codes: 0 = unknown, 1=married, 2=single, 3=others")+
   theme(axis.text.x = element_text(angle=90, hjust = 1))
  
 ```
@@ -129,8 +257,20 @@ ggplot(data = credit_train_clean) +
 ggplot(data = credit_train_clean) +
   geom_point(mapping = aes(x = LIMIT_BAL, y = SEX, color = default))+
   facet_grid(~ EDUCATION)+
-  labs(title = "Facet grid of each Education status by Sex, Limit Balance & Defaults", subtitle = "Education codes: 0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")+
+  labs(title = "Facet grid of each Education status by Sex, Limit Balance & Defaults on train", subtitle = "Education codes: 0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")+
   theme(axis.text.x = element_text(angle=90, hjust = 1))
+ 
+```
+
+```{r, fig.height=5, fig.width=12}
+#plotting marriage, limit balance and on test
+#marital 1 = married, 2 = single, 3 = others but what does 0 mean (not available?)?
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = LIMIT_BAL, y = SEX))+
+  facet_grid(~ EDUCATION)+
+  labs(title = "Facet grid of each Education status by Sex, Limit Balance on Test", subtitle = "Education codes: 0 = not specified, 1=grad school, 2=university, 3=high school, 4 = others, 5 = unknown, 6 = unknown")+
+  theme(axis.text.x = element_text(angle=90, hjust = 1))
+##no category 0 in sex, so needs to be cleaned
  
 ```
 
@@ -139,24 +279,48 @@ Need to understand how the transformations occured and what they mean. It's a me
 PCA reduces attribute space to a large number of variables. It's a dimensionality of reduction data compression method. The goal is dimension reduction, but there is no guarantee the results are interpretable. Hence, take the EDA with a grain of salt not the mix of numbers and the negatives - hard to see what it really 'means'
 Based on the original variable having the highest correlation with the principal component.
 ```{r}
-#Understanding the PAY_PC1 variable
+#Understanding the PAY_PC1 variable on train
 #these are the first three principal components of repayment status (reduces the first 6 variables to three principal components)
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = PAY_PC1, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = PAY_PC1, y = AGE, color = default))+
+  labs(title = "PAY_PC1 and age on train") 
+ 
+```
+```{r}
+#Understanding the PAY_PC1 variable on test
+#these are the first three principal components of repayment status (reduces the first 6 variables to three principal components)
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = PAY_PC1, y = AGE))+
+  labs(title = "PAY_PC1 and age on test") 
  
 ```
 
 ```{r}
-#Understanding the PAY_PC2 variable
+#Understanding the PAY_PC2 variable on train
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = PAY_PC2, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = PAY_PC2, y = AGE, color = default))+
+  labs(title = "PAY_PC2 and age on train") 
  
 ```
-
 ```{r}
-#Understanding the PAY_PC3 variable
+#Understanding the PAY_PC2 variable on test
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = PAY_PC2, y = AGE))+
+  labs(title = "PAY_PC2 and age on test") 
+ 
+```
+```{r}
+#Understanding the PAY_PC3 variable on train
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = PAY_PC3, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = PAY_PC3, y = AGE, color = default))+
+  labs(title = "PAY_PC3 and age on train")  
+ 
+```
+```{r}
+#Understanding the PAY_PC3 variable on test
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = PAY_PC3, y = AGE))+
+  labs(title = "PAY_PC3 and age on test")  
  
 ```
 
@@ -165,30 +329,52 @@ ggplot(data = credit_train_clean) +
 #First 7 principal components of the bill statement amount, and the amount of previous payments from April to September (12 variables reduced to 7 variables while retaining 90% of the variation)
 
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = AMT_PC1, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = AMT_PC1, y = AGE, color = default))+
+  labs(title = "AMT_PC1 and age on train")   
+
+```
+```{r}
+#Understanding the AMT_PC1 variables on test
+#First 7 principal components of the bill statement amount, and the amount of previous payments from April to September (12 variables reduced to 7 variables while retaining 90% of the variation)
+
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = AMT_PC1, y = AGE))+
+  labs(title = "AMT_PC1 and age on test")   
 
 ```
 
 ```{r}
-#Understanding the AMT_PC2 variable
+#Understanding the AMT_PC2 variable on train
 
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = AMT_PC2, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = AMT_PC2, y = AGE, color = default))+
+  labs(title = "AMT_PC2 and age on train")    
 
 ```
+```{r}
+#Understanding the AMT_PC2 variable on test
 
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = AMT_PC2, y = AGE))+
+  labs(title = "AMT_PC2 and age on test")    
+
+```
 ```{r}
 #Understanding the AMT_PC3 variables
 
 ggplot(data = credit_train_clean) +
-  geom_point(mapping = aes(x = AMT_PC3, y = AGE, color = default)) 
+  geom_point(mapping = aes(x = AMT_PC3, y = AGE, color = default))+
+  labs(title = "AMT_PC3 and age on train")     
  
 ```
+```{r}
+#Understanding the AMT_PC3 variables on test
 
-$ AMT_PC4  : num  0.00696 -0.00285 -0.12907 -0.03534 -0.1179 ...
- $ AMT_PC5  : num  -0.0414 0.0439 0.0982 -0.0553 -0.0546 ...
- $ AMT_PC6  : num  0.000887 -0.02619 -0.022383 0.050465 0.112137 ...
- $ AMT_PC7  : num  -0.0563 -0.1 -0.069 -0.0282 0.0186 ...
+ggplot(data = credit_test_clean) +
+  geom_point(mapping = aes(x = AMT_PC3, y = AGE))+
+  labs(title = "AMT_PC3 and age on test")     
+ 
+```
 ```{r}
 #Understanding the AMT_PC4 variables
 
@@ -216,3 +402,4 @@ ggplot(data = credit_train_clean) +
 ggplot(data = credit_train_clean) +
   geom_point(mapping = aes(x = AMT_PC7, y = AGE, color = default)) 
 ```
+

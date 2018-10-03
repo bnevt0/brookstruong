@@ -26,15 +26,50 @@ library(caret, quietly = T)
 library(Amelia, quietly = T)
 library(gridExtra, quietly = T)
 library(xgboost, quietly = T)
+library(ROCR, quietly = T)
+library(Matrix, quietly = T)
 
 setwd("~/Documents/brookstruong")
 
-train.raw <- read_csv("AT2_credit_train_STUDENT.csv")
-val.raw <- read_csv("AT2_credit_test_STUDENT.csv")
+#Import the data
+training.raw <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+predict.raw <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
 
 ```
 
 23,101 observations over 17 variables
+
+##Clean the data based on new observations to make train and test the same
+
+```{r data_clean}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Cleaned ID into character, Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables. See explanation in markdown if you want to know more.
+#also removed previously coded factors of marriage, sex and education
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex to remove the animal classifications 
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
+  
+  return(output)
+}
+
+```
+
+
 
 ```{r Trainset, echo=TRUE}
 glimpse(train.raw)
@@ -230,16 +265,22 @@ grid.arrange(p[[1]],p[[2]],p[[3]],
 ## Data Preparation
 
 ### Missing Values Imputation
-```{r}
-summary(train.raw$SEX)
+```{r, }
 
-#train.imp <- train.raw
-#train.imp$SEX[is.na(train.imp$SEX)] <- '3'
-
-#what to do with the 2 NAs?'
-
-train.imp <- train.imp[complete.cases(train.imp), ]
+train.imp <- train.raw[complete.cases(train.raw), ]
 ```
+
+#### Age Imputation.
+
+```{r}
+  #clean age to remove aged over 100 entries and make them NA first
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+  output$AGE[is.na(output$AGE)] <- round(mean(output$AGE[!is.na(output$AGE)]))
+
+
+```
+
 
 ## Modeling
 1. xgboost,
@@ -249,7 +290,7 @@ train.imp <- train.imp[complete.cases(train.imp), ]
 ### Extreme Gradient Boosting
 
 
-
+```{r}
 ctrl <- trainControl(method = "repeatedcv",
                      repeats = 5,
                      verboseIter = F,
@@ -278,6 +319,7 @@ xgbFit <- train(
 save(xgbFit, file = 'xgbFit')
 
 saveRDS(xgbFit, file = 'xgbFit.rds')
+```
 
 ```{r}
 
@@ -294,9 +336,9 @@ print(xgbFit, details=F)
 ```{r}
 plot(xgbFit)
 
-'xgb.importance(feature_names = colnames(train.imp),
+xgb.importance(feature_names = colnames(train.imp),
                model = xgbFit$finalModel) %>%
-  xgb.ggplot.importance()' #gotta fix this.
+  xgb.ggplot.importance() #gotta fix this.
 
 densityplot(xgbFit,pch='|')
 predict(xgbFit,type = 'prob') -> train.Probs
@@ -307,7 +349,7 @@ histogram(~Y + N, train.Probs)
 
 mixture of ridge & lasso
 
-```{r}
+
 ctrl <- trainControl(method = "repeatedcv",
                      repeats = 5,
                      verboseIter = F,
@@ -327,7 +369,7 @@ glmnetFit <- train(
 )
 
 saveRDS(knnFit, file = 'glmnetFit.rds')
-```
+
 
 ```{r}
 glmnetFit <- readRDS("glmnetFit.rds")
@@ -340,18 +382,7 @@ glmnetFit
 
 ```
 
-```{r}
-glmnplot <- plot(glmnetFit,
-                 plotType = 'level',
-                 cuts = 15,
-                 scales = list(x=list(rot = 90, cex = 0.65)))
-
-update (glmnplot,
-        xlab = "Mixing Percentage\nRidge <------------> Lasso",
-        sub = "",
-        main = "Area Under the ROC Curve",
-        ylab = "Amount of Regularization")
-
+```{r, glmnet}
 densityplot(glmnetFit, pch='|')
 plot(varImp(glmnetFit),15,main='Elastinet Model')
 predict(glmnetFit, type = 'prob') -> train.glmnet.Probs
@@ -433,6 +464,47 @@ svmFit
 plot(svmFit)
 densityplot(svmFit, pch='|')
 predict(svmFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+## Light GBM
+Supposed to be good
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+lgbmGrid <- expand.grid(k=seq(3,23,2))
+knnFit <- train(
+    default~.,
+    train.imp,
+    method = 'RLightGBM',
+    trControl = ctrl,
+    tuneGrid = knnGrid
+)
+
+saveRDS(knnFit, file = 'knnFit.rds')
+
+```{r}
+
+knnFit <- readRDS("knnFit.rds")
+```
+
+
+```{r}
+knnFit
+
+```
+
+```{r}
+plot(knnFit)
+densityplot(knnFit,pch='|')
+predict(knnFit, type = 'prob') -> train.Probs
 histogram(~Y+N, train.Probs)
 ```
 
@@ -548,11 +620,11 @@ ggplot(compiled_results, aes(F1, accuracy)) +
 val.imp <- val.raw
 
 #lakghd
-test.imp$SEX <- as.factor(test.imp$SEX)
-test.imp$EDUCATION <- as.factor(test.imp$EDUCATION)
-test.imp$MARRIAGE <- as.factor(test.imp$MARRIAGE)
+val.imp$SEX <- as.factor(val.imp$SEX)
+val.imp$EDUCATION <- as.factor(val.imp$EDUCATION)
+val.imp$MARRIAGE <- as.factor(val.imp$MARRIAGE)
 
-map_int(test.imp,~sum(is.na(.x)))
+map_int(val.imp,~sum(is.na(.x)))
 
 round(prop.table(table(test.imp$default)),2)
 
@@ -560,6 +632,19 @@ test.imp <- test.imp[complete.cases(test.imp), ]
 ```
 
 ```{r}
+val.imp$default <- predict(xgbFit, val.imp)
+
+final.output <- val.imp %>%
+    select(ID, default)
+
+final.output$default <- as.character(final.output$default)
+
+final.output$default[final.output$default == "N"] = 0 #Set N to 0 and Y to 1
+final.output$default[final.output$default == "Y"] = 1 #Set Y to 1
+
+training.clean$default <- as.factor(training.clean$default)
+
+write.csv(final.output, file="xgb_resultsEd.csv", row.names=FALSE)
 
 
 ```

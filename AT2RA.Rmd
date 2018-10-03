@@ -1,0 +1,588 @@
+---
+title: "AT2 Credit Default"
+author: "Edward Truong / Alex Brooks"
+date: "26/09/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objectives
+1. Develop and deploy a classification model an a product purchase data set.
+2. End to end analysis using R
+3. Learn the `caret` package for ML
+4. Learn to present the case using Rmarkdown
+
+## Read in the dataset
+
+```{r Read in the dataset, error=FALSE, message=FALSE, warning = FALSE}
+library(tidyverse, quietly = T)
+library(dplyr, quietly = T)      #used by Caret
+library(ggplot2, quietly = T)
+library(corrplot, quietly =T)
+library(caret, quietly = T)
+library(Amelia, quietly = T)
+library(gridExtra, quietly = T)
+library(xgboost, quietly = T)
+library(ROCR, quietly = T)
+library(Matrix, quietly = T)
+library(rpart.plot, quietly =T)
+
+setwd("~/Documents/brookstruong")
+
+#Import the data
+training.raw <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+predict.raw <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+
+```
+
+23,101 observations over 17 variables
+
+##Clean the data based on new observations to make train and test the same
+
+```{r data_clean}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Cleaned ID into character, Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables. See explanation in markdown if you want to know more.
+#also removed previously coded factors of marriage, sex and education
+
+clean_data <- function(dataSet) {
+  
+  #clean up sex to remove the animal classifications 
+  output <- dataSet
+  
+  output$ID <- as.character(output$ID)
+  
+  output$SEX <- as.integer(output$SEX)
+  
+  output$SEX[output$SEX > 2] <- 0
+  #clean age to remove aged over 100 entries and make them NA first
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
+  
+  return(output)
+}
+
+```
+
+Create some standard functions for measuring evaulation criteria
+
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+```{r Clean dataset, echo=TRUE}
+training.clean <- clean_data(training.raw)
+
+#Get data into the correct state
+
+#DANGEROUS LINE THAT REMOVES ALL NA
+#training.clean = training.clean[complete.cases(training.clean), ] #Remove rows with NAs
+training.clean$default <- as.character(training.clean$default) #Set as characters so we can change to 0 and 1
+training.clean$default[training.clean$default == "N"] = 0 #Set N to 0 and Y to 1
+training.clean$default[training.clean$default == "Y"] = 1 #Set Y to 1
+training.clean$default <- as.factor(training.clean$default)
+
+```
+
+
+## Train-Test Split
+
+```{r Train-Test Split, echo=TRUE}
+set.seed(42)
+training.rows <- createDataPartition(y = training.raw$default, p=0.7, list=F)
+
+test.set <- training.clean %>% filter(!(rownames(.) %in% training.rows))
+train.set <- training.clean %>% filter(rownames(.) %in% training.rows)
+dim(training.raw)
+
+
+```
+
+```{r pressure, echo=FALSE}
+dim(test.set)
+```
+
+
+## EDA
+
+`default` is the response variable. The response variable is a Yes/No boolean variable therefor is appropriate for our classification problem. 
+
+```{r}
+
+round(prop.table(table(train.set$default)),2)
+
+
+```
+
+76% of the dataset do not default and 24% have defaulted.
+
+***
+
+## Predictor Variables
+
+### Univariate & Bivariate
+
+First step is to look at all variables available using the `ggplot2` framework for visuals.
+
+
+## Data Preparation
+
+### Missing Values Imputation
+```{r, }
+
+train.imp <- train.set
+test.imp <- test.set
+
+map_int(train.imp,~sum(is.na(.x)))
+
+head(train.imp)
+```
+
+#### Age Imputation.
+
+```{r}
+
+age.predictors <- train.imp %>%
+  select(-ID) %>%
+  filter(complete.cases(.))
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5)
+rpartGrid <- data.frame(maxdepth = seq(2,10,1))
+rpartFit_ageimputation <- train (x=age.predictors[,-3],
+                                 y=age.predictors$AGE,
+                                 method='rpart2',
+                                 trControl = ctrl,
+                                 tuneGrid = rpartGrid)
+rpartFit_ageimputation
+
+```
+
+```{r}
+plot(rpartFit_ageimputation)
+
+#7 trees is optimal
+
+rpart.plot(rpartFit_ageimputation$finalModel)
+
+save(rpartFit_ageimputation, file = 'rpartFit_ageimputation')
+saveRDS(rpartFit_ageimputation, file = 'rpartFit_ageimputation.rds')
+```
+
+```{r}
+missing_age <- is.na(train.imp$AGE)
+age.predicted <- predict(rpartFit_ageimputation, newdata = train.imp[missing_age,])
+
+train.imp[missing_age, 'AGE'] <- age.predicted
+
+summary(train.imp)
+
+levels(train.imp$default) <- c("N", "Y")
+
+```
+
+## Modeling
+1. xgboost,
+2. glmnet,
+3. Avg NN
+
+### Extreme Gradient Boosting
+
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     # sampling = 'down',
+                     savePredictions = T
+                     )
+xgbGrid <- expand.grid(
+    nrounds=seq(14,24,2),
+    max_depth=seq(2,8,2),
+    eta=c(0.1, 0.2, 0.3),
+    gamma=1,
+    colsample_bytree=1,
+    min_child_weight=1,
+    subsample=1
+)
+xgbFit <- train(
+    default~.,
+    train.imp,
+    method = 'xgbTree',
+    trControl = ctrl,
+    tuneGrid = xgbGrid
+)
+
+save(xgbFit, file = 'xgbFit')
+
+saveRDS(xgbFit, file = 'xgbFit.rds')
+```
+
+```{r}
+
+xgbFit <- readRDS("xgbFit.rds")
+```
+
+
+
+```{r}
+print(xgbFit, details=F)
+
+```
+
+```{r}
+plot(xgbFit)
+
+xgb.importance(feature_names = colnames(train.imp),
+               model = xgbFit$finalModel) %>%
+  xgb.ggplot.importance() #gotta fix this.
+
+densityplot(xgbFit,pch='|')
+predict(xgbFit,type = 'prob') -> train.Probs
+histogram(~Y + N, train.Probs)
+```
+
+## Elastinet
+
+mixture of ridge & lasso
+
+
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+glmnetGrid <- expand.grid(.alpha = c(0,.2,.4,.6,.8,1),
+                          .lambda = seq(10^-10,10^-1,0.02))
+glmnetFit <- train(
+    default~.,
+    train.imp,
+    trControl=ctrl,
+    method='glmnet',
+    tuneGrid = glmnetGrid
+)
+
+saveRDS(knnFit, file = 'glmnetFit.rds')
+
+
+```{r}
+glmnetFit <- readRDS("glmnetFit.rds")
+```
+
+
+
+```{r}
+glmnetFit
+
+```
+
+```{r, glmnet}
+densityplot(glmnetFit, pch='|')
+plot(varImp(glmnetFit),15,main='Elastinet Model')
+predict(glmnetFit, type = 'prob') -> train.glmnet.Probs
+histogram(~Y + N, train.glmnet.Probs)
+```
+
+## K-NN
+Supposed to be the worst.
+
+
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+knnGrid <- expand.grid(k=seq(3,23,2))
+knnFit <- train(
+    default~.,
+    train.imp,
+    method = 'knn',
+    trControl = ctrl,
+    tuneGrid = knnGrid
+)
+
+saveRDS(knnFit, file = 'knnFit.rds')
+
+```{r}
+
+knnFit <- readRDS("knnFit.rds")
+```
+
+
+```{r}
+knnFit
+
+```
+
+```{r}
+plot(knnFit)
+densityplot(knnFit,pch='|')
+predict(knnFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+## SVM
+
+Code Chunk below
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+svmFit <- train(
+    default~.,
+    train.imp,
+    method = 'svmRadial',
+    trControl = ctrl,
+    tuneGrid = expand.grid(C=c(0.05,0.1,0.2,0.3), sigma=c(0.001,0.005,0.01,0.015))
+)
+
+save(svmFit, file = 'svmFit')
+saveRDS(svmFit, file = 'svmFit')
+```{r}
+
+readRDS("svmFit")
+```
+
+```{r}
+svmFit
+```
+
+```{r}
+plot(svmFit)
+densityplot(svmFit, pch='|')
+predict(svmFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+## Light GBM
+Supposed to be good
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+lgbmGrid <- expand.grid(k=seq(3,23,2))
+knnFit <- train(
+    default~.,
+    train.imp,
+    method = 'RLightGBM',
+    trControl = ctrl,
+    tuneGrid = knnGrid
+)
+
+saveRDS(knnFit, file = 'knnFit.rds')
+
+```{r}
+
+knnFit <- readRDS("knnFit.rds")
+```
+
+
+```{r}
+knnFit
+
+```
+
+```{r}
+plot(knnFit)
+densityplot(knnFit,pch='|')
+predict(knnFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+# Compare the Models
+
+```{r}
+re <-
+  resamples(x = list(
+    xgb = xgbFit,
+    knn = knnFit,
+    elastinet = glmnetFit,
+    svm = svmFit
+  ))
+
+```
+
+```{r}
+dotplot(re)
+bwplot(re)
+
+```
+
+```{r}
+difValues <- diff(re)
+dotplot(difValues)
+
+```
+
+# Test Set Evaluation
+
+## Create test set
+
+```{r}
+
+test.imp <- test.raw
+
+#lakghd
+test.imp$SEX <- as.factor(test.imp$SEX)
+test.imp$EDUCATION <- as.factor(test.imp$EDUCATION)
+test.imp$MARRIAGE <- as.factor(test.imp$MARRIAGE)
+
+map_int(test.imp,~sum(is.na(.x)))
+
+round(prop.table(table(test.imp$default)),2)
+
+test.imp <- test.imp[complete.cases(test.imp), ]
+```
+
+## Predict Results
+
+```{r}
+elastinetPred   <- predict(object = glmnetFit, newdata = test.imp)
+xgbPred         <- predict(object = xgbFit,    newdata = test.imp)
+knnPred         <- predict(object = knnFit,    newdata = test.imp)
+svmPred         <- predict(object = svmFit,    newdata = test.imp)
+
+```
+
+
+```{r}
+library(purrr)
+test.imp$default <- 0
+test.imp$default <- as.factor(test.imp$default)
+test.imp$default <- factor(test.imp$default, 
+                           levels =
+                             levels(train.imp$default))
+
+xtab <- table(xgbPred,test.imp$default)
+xgbCM <- confusionMatrix(xtab)
+
+xtab <- table(elastinetPred,test.imp$default)
+elastinetCM <- caret::confusionMatrix(xtab)
+
+xtab <- table(knnPred,test.imp$default)
+knnCM <-caret::confusionMatrix(xtab)
+
+xtab <- table(svmPred,test.imp$default)
+svmCM <-caret::confusionMatrix(xtab)
+
+
+CM_list <- list(xgbCM, elastinetCM, knnCM, svmCM)
+
+compiled_results <- tibble(
+    models = c('xgb','elastinet','knn','svm'),
+    accuracy = map_dbl(CM_list,~.x$overall[1]),
+    kappa = map_dbl(CM_list,~.x$overall[2]),
+    sensitivity = map_dbl(CM_list,~.x$byClass[1]),
+    specificity = map_dbl(CM_list,~.x$byClass[2]),
+    F1 = map_dbl(CM_list,~.x$byClass[7])
+)
+compiled_results %>% arrange(accuracy,kappa)
+```
+
+```{r}
+library(ggrepel)
+dotplot(reorder(models,accuracy)~accuracy,compiled_results, main = 'Accuracy (Test Set Performance)')
+ggplot(compiled_results, aes(F1, accuracy)) +
+    geom_point(color = 'blue',shape=1) +
+    geom_text_repel(aes(label = models),
+                    box.padding=unit(1,'lines'),
+                    max.iter=1e2,segment.size=.3,
+                    force=1) +
+    theme_bw()+
+    labs(x='F1',y='kappa', title='Kappa vs F1 (Test Set Performance)')
+
+```
+
+
+# Validation Set
+
+***
+```{r}
+val.imp <- val.raw
+
+#lakghd
+val.imp$SEX <- as.factor(val.imp$SEX)
+val.imp$EDUCATION <- as.factor(val.imp$EDUCATION)
+val.imp$MARRIAGE <- as.factor(val.imp$MARRIAGE)
+
+map_int(val.imp,~sum(is.na(.x)))
+
+round(prop.table(table(test.imp$default)),2)
+
+test.imp <- test.imp[complete.cases(test.imp), ]
+```
+
+```{r}
+val.imp$default <- predict(xgbFit, val.imp)
+
+final.output <- val.imp %>%
+    select(ID, default)
+
+final.output$default <- as.character(final.output$default)
+
+final.output$default[final.output$default == "N"] = 0 #Set N to 0 and Y to 1
+final.output$default[final.output$default == "Y"] = 1 #Set Y to 1
+
+training.clean$default <- as.factor(training.clean$default)
+
+write.csv(final.output, file="xgb_resultsEd.csv", row.names=FALSE)
+
+
+```

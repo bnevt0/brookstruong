@@ -25,11 +25,12 @@ library(corrplot, quietly =T)
 library(caret, quietly = T)
 library(Amelia, quietly = T)
 library(gridExtra, quietly = T)
+library(xgboost, quietly = T)
 
 setwd("~/Documents/brookstruong")
 
 train.raw <- read_csv("AT2_credit_train_STUDENT.csv")
-test.raw <- read_csv("AT2_credit_test_STUDENT.csv")
+val.raw <- read_csv("AT2_credit_test_STUDENT.csv")
 
 ```
 
@@ -237,7 +238,7 @@ summary(train.raw$SEX)
 
 #what to do with the 2 NAs?'
 
-
+train.imp <- train.imp[complete.cases(train.imp), ]
 ```
 
 ## Modeling
@@ -249,31 +250,316 @@ summary(train.raw$SEX)
 
 
 
-#ctrl <- trainControl(method = "repeatedcv",
+ctrl <- trainControl(method = "repeatedcv",
                      repeats = 5,
                      verboseIter = F,
                      classProbs = TRUE,
-                     summaryFunction = #twoClassSummary,
+                     summaryFunction = twoClassSummary,
                      # sampling = 'down',
                      savePredictions = T
                      )
 xgbGrid <- expand.grid(
-  nrounds = seq(14,24,2),
-  max_depth = seq(2,8,2),
-  eta=c(0.1,0.2,0.3),
-  gamma=1,
-  colsample_bytree=1,
-  min_child_weight=1,
-  subsample=1
+    nrounds=seq(14,24,2),
+    max_depth=seq(2,8,2),
+    eta=c(0.1, 0.2, 0.3),
+    gamma=1,
+    colsample_bytree=1,
+    min_child_weight=1,
+    subsample=1
+)
+xgbFit <- train(
+    default~.,
+    train.imp,
+    method = 'xgbTree',
+    trControl = ctrl,
+    tuneGrid = xgbGrid
 )
 
-#xgbFit <- train(
-  default~.,
-  train.imp,
-  method = 'xgbTree',
-  trcontrol = ctrl,
-  tuneGrid = xgbGrid
+save(xgbFit, file = 'xgbFit')
+
+saveRDS(xgbFit, file = 'xgbFit.rds')
+
+```{r}
+
+xgbFit <- readRDS("xgbFit.rds")
+```
+
+
+
+```{r}
+print(xgbFit, details=F)
+
+```
+
+```{r}
+plot(xgbFit)
+
+'xgb.importance(feature_names = colnames(train.imp),
+               model = xgbFit$finalModel) %>%
+  xgb.ggplot.importance()' #gotta fix this.
+
+densityplot(xgbFit,pch='|')
+predict(xgbFit,type = 'prob') -> train.Probs
+histogram(~Y + N, train.Probs)
+```
+
+## Elastinet
+
+mixture of ridge & lasso
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+glmnetGrid <- expand.grid(.alpha = c(0,.2,.4,.6,.8,1),
+                          .lambda = seq(10^-10,10^-1,0.02))
+glmnetFit <- train(
+    default~.,
+    train.imp,
+    trControl=ctrl,
+    method='glmnet',
+    tuneGrid = glmnetGrid
 )
 
+saveRDS(knnFit, file = 'glmnetFit.rds')
+```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+glmnetFit <- readRDS("glmnetFit.rds")
+```
+
+
+
+```{r}
+glmnetFit
+
+```
+
+```{r}
+glmnplot <- plot(glmnetFit,
+                 plotType = 'level',
+                 cuts = 15,
+                 scales = list(x=list(rot = 90, cex = 0.65)))
+
+update (glmnplot,
+        xlab = "Mixing Percentage\nRidge <------------> Lasso",
+        sub = "",
+        main = "Area Under the ROC Curve",
+        ylab = "Amount of Regularization")
+
+densityplot(glmnetFit, pch='|')
+plot(varImp(glmnetFit),15,main='Elastinet Model')
+predict(glmnetFit, type = 'prob') -> train.glmnet.Probs
+histogram(~Y + N, train.glmnet.Probs)
+```
+
+## K-NN
+Supposed to be the worst.
+
+
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+knnGrid <- expand.grid(k=seq(3,23,2))
+knnFit <- train(
+    default~.,
+    train.imp,
+    method = 'knn',
+    trControl = ctrl,
+    tuneGrid = knnGrid
+)
+
+saveRDS(knnFit, file = 'knnFit.rds')
+
+```{r}
+
+knnFit <- readRDS("knnFit.rds")
+```
+
+
+```{r}
+knnFit
+
+```
+
+```{r}
+plot(knnFit)
+densityplot(knnFit,pch='|')
+predict(knnFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+## SVM
+
+Code Chunk below
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = T
+                     # sampling = 'down'
+                     )
+svmFit <- train(
+    default~.,
+    train.imp,
+    method = 'svmRadial',
+    trControl = ctrl,
+    tuneGrid = expand.grid(C=c(0.05,0.1,0.2,0.3), sigma=c(0.001,0.005,0.01,0.015))
+)
+
+save(svmFit, file = 'svmFit')
+saveRDS(svmFit, file = 'svmFit')
+```{r}
+
+readRDS("svmFit")
+```
+
+```{r}
+svmFit
+```
+
+```{r}
+plot(svmFit)
+densityplot(svmFit, pch='|')
+predict(svmFit, type = 'prob') -> train.Probs
+histogram(~Y+N, train.Probs)
+```
+
+# Compare the Models
+
+```{r}
+re <-
+  resamples(x = list(
+    xgb = xgbFit,
+    knn = knnFit,
+    elastinet = glmnetFit,
+    svm = svmFit
+  ))
+
+```
+
+```{r}
+dotplot(re)
+bwplot(re)
+
+```
+
+```{r}
+difValues <- diff(re)
+dotplot(difValues)
+
+```
+
+# Test Set Evaluation
+
+## Create test set
+
+```{r}
+
+test.imp <- test.raw
+
+#lakghd
+test.imp$SEX <- as.factor(test.imp$SEX)
+test.imp$EDUCATION <- as.factor(test.imp$EDUCATION)
+test.imp$MARRIAGE <- as.factor(test.imp$MARRIAGE)
+
+map_int(test.imp,~sum(is.na(.x)))
+
+round(prop.table(table(test.imp$default)),2)
+
+test.imp <- test.imp[complete.cases(test.imp), ]
+```
+
+## Predict Results
+
+```{r}
+elastinetPred   <- predict(object = glmnetFit, newdata = test.imp)
+xgbPred         <- predict(object = xgbFit,    newdata = test.imp)
+knnPred         <- predict(object = knnFit,    newdata = test.imp)
+svmPred         <- predict(object = svmFit,    newdata = test.imp)
+
+```
+
+
+```{r}
+library(purrr)
+test.imp$default <- 0
+test.imp$default <- as.factor(test.imp$default)
+test.imp$default <- factor(test.imp$default, 
+                           levels =
+                             levels(train.imp$default))
+
+xtab <- table(xgbPred,test.imp$default)
+xgbCM <- confusionMatrix(xtab)
+
+xtab <- table(elastinetPred,test.imp$default)
+elastinetCM <- caret::confusionMatrix(xtab)
+
+xtab <- table(knnPred,test.imp$default)
+knnCM <-caret::confusionMatrix(xtab)
+
+xtab <- table(svmPred,test.imp$default)
+svmCM <-caret::confusionMatrix(xtab)
+
+
+CM_list <- list(xgbCM, elastinetCM, knnCM, svmCM)
+
+compiled_results <- tibble(
+    models = c('xgb','elastinet','knn','svm'),
+    accuracy = map_dbl(CM_list,~.x$overall[1]),
+    kappa = map_dbl(CM_list,~.x$overall[2]),
+    sensitivity = map_dbl(CM_list,~.x$byClass[1]),
+    specificity = map_dbl(CM_list,~.x$byClass[2]),
+    F1 = map_dbl(CM_list,~.x$byClass[7])
+)
+compiled_results %>% arrange(accuracy,kappa)
+```
+
+```{r}
+library(ggrepel)
+dotplot(reorder(models,accuracy)~accuracy,compiled_results, main = 'Accuracy (Test Set Performance)')
+ggplot(compiled_results, aes(F1, accuracy)) +
+    geom_point(color = 'blue',shape=1) +
+    geom_text_repel(aes(label = models),
+                    box.padding=unit(1,'lines'),
+                    max.iter=1e2,segment.size=.3,
+                    force=1) +
+    theme_bw()+
+    labs(x='F1',y='kappa', title='Kappa vs F1 (Test Set Performance)')
+
+```
+
+
+# Validation Set
+
+***
+```{r}
+val.imp <- val.raw
+
+#lakghd
+test.imp$SEX <- as.factor(test.imp$SEX)
+test.imp$EDUCATION <- as.factor(test.imp$EDUCATION)
+test.imp$MARRIAGE <- as.factor(test.imp$MARRIAGE)
+
+map_int(test.imp,~sum(is.na(.x)))
+
+round(prop.table(table(test.imp$default)),2)
+
+test.imp <- test.imp[complete.cases(test.imp), ]
+```
+
+```{r}
+
+
+```

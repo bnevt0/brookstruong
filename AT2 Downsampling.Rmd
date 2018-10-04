@@ -1,0 +1,492 @@
+---
+title: "AT2 Credit Default"
+author: "Edward Truong / Alex Brooks"
+date: "26/09/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objectives
+1. Develop and deploy a classification model an a product purchase data set.
+2. End to end analysis using R
+3. Learn the `caret` package for ML
+4. Learn to present the case using Rmarkdown
+
+## Read in the dataset
+
+```{r Read in the dataset, error=FALSE, message=FALSE, warning = FALSE}
+library(tidyverse, quietly = T)
+library(dplyr, quietly = T)      #used by Caret
+library(ggplot2, quietly = T)
+library(corrplot, quietly =T)
+library(caret, quietly = T)
+library(Amelia, quietly = T)
+library(gridExtra, quietly = T)
+library(xgboost, quietly = T)
+library(ROCR, quietly = T)
+library(Matrix, quietly = T)
+library(rpart.plot, quietly =T)
+
+setwd("~/Documents/brookstruong")
+
+#Import the data
+training.raw <- read_csv('AT2_credit_train_STUDENT.csv')
+predict.raw <- read_csv('AT2_credit_test_STUDENT.csv')
+
+```
+
+23,101 observations over 17 variables for the training/test split
+6899 observations over 17 variables for the prediction set.
+
+##Clean the data based on new observations to make train and test the same
+
+
+```{r Trainset, echo=TRUE}
+glimpse(training.raw)
+
+training.raw$default <- as.factor(training.raw$default)
+training.raw$SEX <- as.factor(training.raw$SEX)
+training.raw$MARRIAGE <- as.factor(training.raw$MARRIAGE)
+training.raw$AGE <- as.numeric(training.raw$AGE)
+#remove random anomilies
+
+#remove NA - 2 rows from the sex being cat/dog
+training.raw <- training.raw[complete.cases(training.raw), ]
+
+#set negative balance values to 0. Max Limit_bal for test set is 760K and validation set for 800k. Lets set these at median value.
+training.raw$LIMIT_BAL[training.raw$LIMIT_BAL <= 0] <- 0
+training.raw$LIMIT_BAL[training.raw$LIMIT_BAL >800000] <-140000 
+
+
+#all education factors greater than 4, set them to 4, also set 0 to 4
+training.raw$EDUCATION[training.raw$EDUCATION == 5] <- 4
+training.raw$EDUCATION[training.raw$EDUCATION == 6] <- 4
+training.raw$EDUCATION[training.raw$EDUCATION == 0] <- 4
+training.raw$EDUCATION <- factor(training.raw$EDUCATION)
+
+#clean marriage
+training.raw$MARRIAGE <- factor(training.raw$MARRIAGE)
+training.raw$MARRIAGE[training.raw$MARRIAGE == 0] <- 3
+
+#lets label our factors properly
+training.raw$SEX <- factor(training.raw$SEX,
+                           levels =c('1', '2'),
+                           labels =c('Male', 'Female'))
+
+training.raw$EDUCATION[training.raw$EDUCATION == 2] <- 4
+training.raw$EDUCATION <- factor(training.raw$EDUCATION,
+                                 levels =c('1', '2', '3', '4'),
+                                 labels = c('Grad_School', 'Uni', 'High_School', 'Other'))
+training.raw$EDUCATION <- as.factor(training.raw$EDUCATION)
+training.raw$MARRIAGE <- factor(training.raw$MARRIAGE,
+                                levels = c('1','2','3'),
+                                labels = c('Married', 'Single', 'Other'))
+
+summary(training.raw)
+
+```
+
+```{r Correlation Plot}
+cplot <- training.raw %>%
+  select(-default) %>%
+  select_if(is.numeric)
+
+M <- cor(cplot)
+p.mat <- cor.mtest(M)
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, 
+         method = "color",
+         order= "hclust",
+         type="full",
+         col=col(200),
+         diag =F,
+         title="Correlation of Numeric Variables",
+         addCoef.col = "black",
+         sig.level = 0.05,
+         insig ="blank",
+         mar=c(0,0,3,0))
+
+```
+
+## Fix age imputation
+
+```{r}
+
+training.raw$AGE <- ifelse(training.raw$AGE >=100, NA, training.raw$AGE)
+
+map_int(training.raw,~sum(is.na(.x)))
+
+'we can see that there is 50 age that are missing, out of the scheme of things, it is <1% of the total dataset, however lets play with using rpart to predict the missing age'
+
+
+```
+
+### Missing Values Imputation
+```{r, }
+
+train.imp <- training.raw[-1]
+
+map_int(train.imp,~sum(is.na(.x)))
+
+head(train.imp)
+```
+
+#### Age Imputation.
+
+```{r}
+
+age.predictors <- train.imp %>%
+  select(LIMIT_BAL, SEX, EDUCATION, MARRIAGE, AGE, PAY_PC1) %>%
+  filter(complete.cases(.))
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5)
+rpartGrid <- data.frame(maxdepth = seq(2,10,1))
+rpartFit_ageimputation <- train (x=age.predictors[,-3],
+                                 y=age.predictors$AGE,
+                                 method='rpart2',
+                                 trControl = ctrl,
+                                 tuneGrid = rpartGrid)
+rpartFit_ageimputation
+
+```
+
+```{r}
+plot(rpartFit_ageimputation)
+
+# Tree depth of 7 is optimal
+
+rpart.plot(rpartFit_ageimputation$finalModel)
+
+#save the model externally to load back in
+saveRDS(rpartFit_ageimputation, file = 'rpartFit_ageimputation.rds')
+```
+
+```{r}
+#insert missing age back into the dataset
+missing_age <- is.na(train.imp$AGE)
+age.predicted <- predict(rpartFit_ageimputation, newdata = train.imp[missing_age,])
+
+train.imp[missing_age, 'AGE'] <- age.predicted
+
+summary(train.imp)
+
+```
+
+## Train-Test Split
+
+```{r Train-Test Split, echo=TRUE}
+set.seed(42)
+training_rows <- createDataPartition(y = train.imp$default, p=0.7, list=F)
+
+test.imp <- train.imp %>% filter(!(rownames(.) %in% training_rows))
+train.imp <- train.imp %>% filter(rownames(.) %in% training_rows)
+dim(train.imp)
+
+```
+
+```{r pressure, echo=FALSE}
+dim(test.imp)
+```
+
+## Missing values analysis
+
+```{r}
+
+map_int(train.imp,~sum(is.na(.x)))
+
+```
+
+No missing values.
+
+## EDA
+
+`default` is the response variable. The response variable is a Yes/No boolean variable therefor is appropriate for our classification problem. 
+
+```{r}
+
+round(prop.table(table(train.imp$default)),2)
+
+```
+
+76% of the dataset do not default and 24% have defaulted. This is a classic imbalanced dataset. We will need to deal with this either prior to modelling or using packages to sample for us.
+
+***
+
+## Predictor Variables
+
+### Univariate & Bivariate
+
+First step is to look at all variables available using the `ggplot2` framework for visuals.
+
+#### Continuous Variables
+
+1. `LIMIT_BAL` The limit Balance beings at -99 with a median of 140,000, mean of 167880 and max of 1,000,000.
+2. `AGE` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+
+```{r}
+library(scales)
+p1 <- ggplot(data=train.imp, aes(x=LIMIT_BAL)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip() +
+  scale_x_continuous(labels=comma)
+p2 <- ggplot(data=train.imp, aes(x=AGE)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p1,p2, nrow=1)
+```
+
+```{r}
+
+ggplot(train.imp,aes(x=L,y= ..count.. / sum(..count..))) +
+  geom_jitter(aes(colour = SEX)) +
+  theme_bw() +
+  scale_shape (solid = F)
+
+ggplot(data=train.imp, aes(x=LIMIT_BAL, y=AGE)) +
+  geom_jitter(aes(fill=default)) +
+  coord_flip()
+
+```
+
+```{r}
+p3 <- ggplot(data=train.imp, aes(x=PAY_PC1)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p4 <- ggplot(data=train.imp, aes(x=PAY_PC2)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p5 <- ggplot(data=train.imp, aes(x=PAY_PC3)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p3,p4,p5, nrow=1)
+```
+
+
+```{r}
+p6 <- ggplot(data=train.imp, aes(x=AMT_PC1)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p7 <- ggplot(data=train.imp, aes(x=AMT_PC2)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p8 <- ggplot(data=train.imp, aes(x=AMT_PC3)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p9 <- ggplot(data=train.imp, aes(x=AMT_PC4)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p10 <- ggplot(data=train.imp, aes(x=AMT_PC5)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p11 <- ggplot(data=train.imp, aes(x=AMT_PC6)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+p12 <- ggplot(data=train.imp, aes(x=AMT_PC7)) +
+  geom_histogram(aes(fill=default), bins = 40) +
+  coord_flip()
+grid.arrange(p6,p7,p8,p9,p10,p11,p12, nrow=2)
+```
+#### Categorical Variables
+
+1. `SEX` The limit Balance beings at -99 with a median of 140,000, mean of 167880 and max of 1,000,000.
+2. `EDUCATION` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+2. `MARRIAGE` certainly shows many outliers beyond the 100+ range. Age begins at 21 with a median of 34, mean of 35.65 and max of 141.
+
+```{r}
+
+get_legend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+p <- lapply(X = c('SEX', 'EDUCATION', 'MARRIAGE'),
+            FUN = function(x) ggplot(data = train.imp) +
+              aes_string(x=x, fill = 'default') +
+              geom_bar(position="dodge") +
+              theme(legend.position="none"))
+legend <- get_legend(ggplot(data = train.imp, aes(x=SEX, fill = default)) +
+                       geom_bar())
+
+grid.arrange(p[[1]],p[[2]],p[[3]],
+             legend, layout_matrix = cbind(c(1,2,3),
+                                           c(4,5,3),
+                                           c(6,6,6)),
+             widths=c(3,3,1))
+
+```
+
+***
+## Data Preparation
+
+## Modeling
+1. xgboost,
+2. glmnet, -removed from this file
+3. Avg NN - removed from this file.
+
+### Extreme Gradient Boosting
+
+```{r}
+#read in the model if it's on hand If not, follow code from 336.
+xgbFitD <- readRDS('xgbFitD.rds')
+
+#control measures
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
+                     verboseIter = F,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     sampling = 'down',
+                     savePredictions = T
+                     )
+
+#grid expansion
+xgbGrid <- expand.grid(
+    nrounds=seq(100, 200, 500), #Run the model how many times?
+    max_depth=6,                #The maximum depth of a tree
+    eta=c(0.01, 0.1, 0.5),      #Step size shrinkage (smaller is less likely to overfit)
+    gamma=0,                    #Minimum Loss reduction (the larger the more conservative the model)
+    colsample_bytree=c(0.5,1),  #subsample ratio of columns when constructing each tree
+    min_child_weight=1,         #minimum sum of instance weight (hessian) needed in a child
+    subsample=c(0.5, 1)         #Subsample ratio of the training instance; 0.5 means half the data is used.
+)
+xgbFitD <- train(
+    default~
+      PAY_PC1 +
+      AGE +
+      LIMIT_BAL +
+      AMT_PC1 +
+      EDUCATION +
+      PAY_PC2 +
+      PAY_PC3 +
+      AMT_PC2 +
+      AMT_PC7,
+    train.imp,
+    method = 'xgbTree',
+    trControl = ctrl,
+    tuneGrid = xgbGrid,
+    metric = "ROC"
+)
+
+saveRDS(xgbFitD, file = 'xgbFitD.rds')
+```
+
+
+```{r}
+print(xgbFitD, details=F)
+
+```
+
+```{r}
+plot(xgbFitD)
+
+xgb.importance(
+               model = xgbFitD$finalModel) %>%
+  xgb.ggplot.importance()
+
+densityplot(xgbFitF,pch='|')
+predict(xgbFitD,type = 'prob') -> train.ProbsD
+histogram(~Y + N, train.ProbsD)
+```
+
+
+# Test Set Evaluation
+
+## Create test set
+
+```{r, Clean test set}
+
+test.imp
+
+summary(test.imp)
+
+map_int(test.imp,~sum(is.na(.x)))
+
+
+test.imp <- test.imp[complete.cases(test.imp), ]
+```
+
+## Predict Results
+
+```{r}
+
+xgbPredDownF <- predict(object = xgbFitD, newdata = test.imp)
+
+```
+
+
+```{r}
+library(purrr)
+
+xtab <- table(xgbPredDownF,test.imp$default)
+xgbCM <- confusionMatrix(xtab)
+
+#CM_list <- list(xgbCM, elastinetCM, knnCM, svmCM)
+
+#compiled_results <- tibble(
+    #models = c('xgb','elastinet','knn','svm'),
+    #accuracy = map_dbl(CM_list,~.x$overall[1]),
+    #kappa = map_dbl(CM_list,~.x$overall[2]),
+    #sensitivity = map_dbl(CM_list,~.x$byClass[1]),
+    #specificity = map_dbl(CM_list,~.x$byClass[2]),
+    #F1 = map_dbl(CM_list,~.x$byClass[7])
+#)
+#compiled_results %>% arrange(accuracy,kappa)
+
+xgbCM
+```
+
+
+# Validation Set
+
+***
+```{r}
+predict.raw <- read_csv('AT2_credit_test_STUDENT.csv')
+val.imp <- predict.raw
+
+val.imp$SEX <- as.factor(val.imp$SEX)
+val.imp$SEX <- factor(val.imp$SEX,
+                           levels =c('1', '2'),
+                           labels =c('Male', 'Female'))
+
+#all education factors greater than 4, set them to 4, also set 0 to 4
+  val.imp$EDUCATION[val.imp$EDUCATION == 5] <- 4
+  val.imp$EDUCATION[val.imp$EDUCATION == 6] <- 4
+  val.imp$EDUCATION[val.imp$EDUCATION == 0] <- 4
+  val.imp$EDUCATION <- factor(val.imp$EDUCATION,
+                                 levels =c('1', '2', '3', '4'),
+                                 labels = c('Grad_School', 'Uni', 'High_School', 'Other'))
+
+  #clean marriage
+val.imp$MARRIAGE[val.imp$MARRIAGE == 0] <- 3
+val.imp$MARRIAGE <- as.factor(val.imp$MARRIAGE)
+val.imp$MARRIAGE <- factor(val.imp$MARRIAGE,
+                                levels = c('1','2','3'),
+                                labels = c('Married', 'Single', 'Other'))
+
+summary(val.imp)
+
+```
+
+```{r}
+val.imp$default <- predict(xgbFitD, val.imp)
+
+final.output <- val.imp %>%
+    select(ID, default)
+
+final.output$default <- as.character(final.output$default)
+
+final.output$default[final.output$default == "N"] = 0 #Set N to 0 and Y to 1
+final.output$default[final.output$default == "Y"] = 1 #Set Y to 1
+
+training.clean$default <- as.factor(training.clean$default)
+
+final.output
+
+write.csv(final.output, file="xgb_resultsEdDown.csv", row.names=FALSE)
+
+
+```

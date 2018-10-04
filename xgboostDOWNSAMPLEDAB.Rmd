@@ -12,6 +12,8 @@ library(ROCR, quietly = T)
 library(caret)
 library(xgboost, quietly = T)
 library(Matrix)
+library(DMwR)
+library(ROSE)
 ```
 
 # Start modelling
@@ -203,8 +205,199 @@ boost.eval$AUC <- get_auc(boost.prob, test.labels)
 
 boost.eval
 
+
 ```
 
+```{r}
+
+#Downsample, Upsample, Smote and ROSE
+
+down.boost.cv <- xgb.cv(params = param,
+                   data = dtrain,
+                   nfold = 4,
+                   nround = 30,
+                   early_stopping_rounds = 30,
+                   label = train.labels,
+                   watchlist = watchlist,
+                   prediction = TRUE,
+                   sampling = "down")
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+down.max.auc = which.max(down.boost.cv$evaluation_log[, test_auc_mean]) 
+
+down.boost.model <- xgb.train(params = param,
+                         data = dtrain,
+                         nrounds = down.max.auc,
+                         watchlist = watchlist)
+
+down.boost.prob <- predict(down.boost.model, dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+down.boost.predictions <- rep(0,nrow(test.set[,-1]))
+down.boost.predictions[boost.prob >.5] <- 1
+
+#Create a confusion matrix
+down.boost.cm <- table(pred=down.boost.predictions, true=test.labels)
+
+#converted CM to dataframe extracted the frequency values for each score
+down.boost.df <- as.data.frame(down.boost.cm)
+
+#Calculate our evaluation measures and place them in a data frame
+down.boost.eval <- get_evaluation_measures("XGBoost DownSample",
+                                         down.boost.df$Freq[1],
+                                         down.boost.df$Freq[2],
+                                         down.boost.df$Freq[3],
+                                         down.boost.df$Freq[4])
+
+
+down.boost.eval$AUC <- get_auc(down.boost.prob, test.labels)
+
+down.boost.eval
+
+###UP
+
+up.boost.cv <- xgb.cv(params = param,
+                   data = dtrain,
+                   nfold = 4,
+                   nround = 200,
+                   early_stopping_rounds = 30,
+                   label = train.labels,
+                   watchlist = watchlist,
+                   prediction = TRUE,
+                   sampling = "up")
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+up.max.auc = which.max(up.boost.cv$evaluation_log[, test_auc_mean]) 
+
+up.boost.model <- xgb.train(params = param,
+                         data = dtrain,
+                         nrounds = up.max.auc,
+                         watchlist = watchlist)
+
+up.boost.prob <- predict(up.boost.model, dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+up.boost.predictions <- rep(0,nrow(test.set[,-1]))
+up.boost.predictions[boost.prob >.5] <- 1
+
+#Create a confusion matrix
+up.boost.cm <- table(pred=up.boost.predictions, true=test.labels)
+
+#converted CM to dataframe extracted the frequency values for each score
+up.boost.df <- as.data.frame(up.boost.cm)
+
+#Calculate our evaluation measures and place them in a data frame
+up.boost.eval <- get_evaluation_measures("XGBoost UPsample",
+                                         up.boost.df$Freq[1],
+                                         up.boost.df$Freq[2],
+                                         up.boost.df$Freq[3],
+                                         up.boost.df$Freq[4])
+
+
+up.boost.eval$AUC <- get_auc(up.boost.prob, test.labels)
+
+up.boost.eval
+
+
+newdf <- rbind(boost.eval, down.boost.eval, up.boost.eval)
+newdf
+
+##SMOTE
+
+smo.boost.cv <- xgb.cv(params = param,
+                   data = dtrain,
+                   nfold = 4,
+                   nround = 200,
+                   early_stopping_rounds = 30,
+                   label = train.labels,
+                   watchlist = watchlist,
+                   prediction = TRUE,
+                   sampling = "SMOTE")
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+smo.max.auc = which.max(smo.boost.cv$evaluation_log[, test_auc_mean]) 
+
+smo.boost.model <- xgb.train(params = param,
+                         data = dtrain,
+                         nrounds = smo.max.auc,
+                         watchlist = watchlist)
+
+smo.boost.prob <- predict(smo.boost.model, dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+smo.boost.predictions <- rep(0,nrow(test.set[,-1]))
+smo.boost.predictions[boost.prob >.5] <- 1
+
+#Create a confusion matrix
+smo.boost.cm <- table(pred=smo.boost.predictions, true=test.labels)
+
+#converted CM to dataframe extracted the frequency values for each score
+smo.boost.df <- as.data.frame(smo.boost.cm)
+
+#Calculate our evaluation measures and place them in a data frame
+smo.boost.eval <- get_evaluation_measures("XGBoost SMOTE",
+                                         smo.boost.df$Freq[1],
+                                         smo.boost.df$Freq[2],
+                                         smo.boost.df$Freq[3],
+                                         smo.boost.df$Freq[4])
+
+
+smo.boost.eval$AUC <- get_auc(smo.boost.prob, test.labels)
+
+smo.boost.eval
+
+newdf <- rbind(boost.eval, down.boost.eval, up.boost.eval, smo.boost.eval)
+newdf
+
+##SMOTE
+
+ro.boost.cv <- xgb.cv(params = param,
+                   data = dtrain,
+                   nfold = 4,
+                   nround = 200,
+                   early_stopping_rounds = 30,
+                   label = train.labels,
+                   watchlist = watchlist,
+                   prediction = TRUE,
+                   sampling = "ROSE")
+
+#Of the 200 rounds, which had the best area under the curve. Use that as nrounds
+ro.max.auc = which.max(ro.boost.cv$evaluation_log[, test_auc_mean]) 
+
+ro.boost.model <- xgb.train(params = param,
+                         data = dtrain,
+                         nrounds = ro.max.auc,
+                         watchlist = watchlist)
+
+ro.boost.prob <- predict(ro.boost.model, dtest)
+
+# Create a vector to hold predictions,turn it from a probability to a prediction
+ro.boost.predictions <- rep(0,nrow(test.set[,-1]))
+ro.boost.predictions[boost.prob >.5] <- 1
+
+#Create a confusion matrix
+ro.boost.cm <- table(pred=ro.boost.predictions, true=test.labels)
+
+#converted CM to dataframe extracted the frequency values for each score
+ro.boost.df <- as.data.frame(ro.boost.cm)
+
+#Calculate our evaluation measures and place them in a data frame
+ro.boost.eval <- get_evaluation_measures("XGBoost ROSE",
+                                         ro.boost.df$Freq[1],
+                                         ro.boost.df$Freq[2],
+                                         ro.boost.df$Freq[3],
+                                         ro.boost.df$Freq[4])
+
+
+ro.boost.eval$AUC <- get_auc(ro.boost.prob, test.labels)
+
+ro.boost.eval
+
+newdf <- rbind(boost.eval, down.boost.eval, up.boost.eval, smo.boost.eval, ro.boost.eval)
+newdf
+
+ggplot(newdf, aes())
+```
 
 
 ```{r}
@@ -244,7 +437,7 @@ final.boost.cv <- xgb.cv(params = param,
                    early_stopping_rounds = 30,
                    label = final.train.labels,
                    prediction = TRUE,
-                   sampling = "down")
+                   sampling = "SMOTE")
 
 #Of the 200 rounds, which had the best area under the curve. Use that as nrounds
 final.max.auc = which.max(final.boost.cv$evaluation_log[, test_auc_mean]) 
@@ -265,7 +458,7 @@ final.test.set$default <- final.boost.predictions
 final.output <- final.test.set %>%
     select(ID, default)
 
-write.csv(final.output, file="predictions/xgb_resultsDS.csv", row.names=FALSE)
+write.csv(final.output, file="xgb_resultsSMOTE.csv", row.names=FALSE)
 
 ```
 

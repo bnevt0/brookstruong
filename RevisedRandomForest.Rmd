@@ -1,0 +1,382 @@
+---
+title: "Revised Modelling with deeper EDA and feature selection by AB"
+author: "Alex Brooks"
+date: "29 September 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, error=FALSE, message=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse, quietly = T)
+library(mlbench)
+library(ggplot2, quietly = T)
+library(caret, quietly = T)
+library(dplyr, quietly = T)
+library(ROCR, quietly = T)
+options(scipen=999)
+library(randomForest)
+```
+
+# Finetuning
+Goal is to look into higher credit limit balances and older age
+
+```{r}
+#Import the data
+credit_trained <- read.csv('AT2_credit_train_STUDENT.csv', header = TRUE)
+validation_trained <- read.csv('AT2_credit_test_STUDENT.csv', header = TRUE)
+str(validation_trained)
+```
+
+```{r data_clean Oct 7}
+#Data cleaning function we can use each time to make sure we share the same dataset  
+#Sex into two variables (to remove animals), Age into NAs for over 100 errored data and then transformed those NAs into median age of 35, Education into 4 categorised variables, marriage into 3 categorised variables.  
+  
+
+clean_data <- function(dataSet) {
+  
+   
+  output <- dataSet
+  
+  #SEX
+  #To get rid of cat, dog, dolphin anomalies
+  output$SEX <- as.integer(output$SEX)
+  output$SEX[output$SEX > 2] <- 0
+  #AGE
+  #clean age to remove aged over 100 entries and make them NA first
+  output$AGE <- ifelse(output$AGE >=100, NA, output$AGE)
+  #changing the NAs to now become the median age, which is rounded to 35
+  output$AGE[is.na(output$AGE)] <- round(mean(output$AGE[!is.na(output$AGE)]))
+
+   #all education factors greater than 4, set them to 4, also set 0 to 4
+  output$EDUCATION[output$EDUCATION > 4] <- 4
+  output$EDUCATION[output$EDUCATION == 0] <- 4
+  #clean marriage
+   output$MARRIAGE[output$MARRIAGE == 0] <- 3
+
+  
+  return(output)
+}
+```
+##Check out the data
+If we train it on all this data, we have a key that can only perform in one dataset, so let's get rid of the outliers cos they don't give us predictive values (EG, limit bal over $700,000)
+
+```{r}
+credit_train_cleaned <- clean_data(credit_trained)
+credit_test_cleaned <- clean_data(validation_trained)
+
+str(credit_train_cleaned)
+str(credit_test_cleaned)
+#note test data has no default, so we need to do a split of our train data
+```
+
+#Check age cleaning so you can verify the over 100s are removed and replaced with median of 35
+```{r}
+#check that our data cleaning has remained correct
+cleaningup_age <- credit_train_clean %>%
+  group_by(AGE) %>%
+  summarise(count=n())
+View(cleaningup_age)
+```
+#I suspect this is making errors, so I have commented it out
+```{r}
+#Find credit limit balance high and low based on 'high' being above 250,000 (the bulk of limit balances are below this - only the outliers are above it)
+#credit_train_limit_high <- credit_train_cleaned %>%
+#mutate(test22 = ifelse(credit_train_cleaned$LIMIT_BAL >= 250,000, '1', '0'))
+
+
+
+#View(credit_train_limit_high)
+#View(credit_train_limit_low)
+ 
+#Limit balance now has no number, only a descriptor of high or low. This might not be useful for transformations though
+```
+
+```{r}
+#let's make age brackets - but comment it out - there are 8403 NAs in age when I run this, which isn't correct
+  #making age brackets of under 30, 30 to 49 and 50+
+  #train_age_brackets <- credit_train_cleaned %>%
+  #mutate(AGE <- ifelse(credit_train_cleaned$AGE <=30, '<=30',"")) %>%
+  #mutate(AGE <- ifelse(credit_train_cleaned$AGE == 31:49,'30-49', "")) %>%
+  #mutate(AGE <- ifelse(credit_train_cleaned$AGE >50, '50+',""))
+#View(train_age_brackets)  
+#THIS IS NOT WORKING PROPERLY - see NA check below.
+```
+
+##Seems to be generating some NAs in age because of poor cleaning of age above
+```{r}
+library(dplyr)
+#Find any NAs to see what's going wrong
+#credit_train_cleaned %>% 
+  #select_if(function(x) any(is.na(x))) %>% 
+  #summarise_all(funs(sum(is.na(.)))) -> extra_NA
+#extra_NA
+
+```
+#Let's proceed as best we can, leaving age and limit-bal as is for now
+Create some standard functions for measuring evaulation criteria
+First, split the training data into a test and train (as the test data supplied has no default)
+Create some standard functions for measuring evaulation criteria
+
+```{r}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+
+```{r}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+Clean our training data
+```{r}
+training.clean <- clean_data(credit_train_cleaned)
+```
+
+Get train and test sets
+```{r}
+training.clean = training.clean[complete.cases(training.clean), ]
+
+trainset.size <- floor(0.80 * nrow(training.clean))
+
+target.col <- grep("default",names(training.clean))
+
+#set random seed 
+set.seed(42)
+
+trainset.indices <- sample(seq_len(nrow(training.clean[,-1])), size = trainset.size)
+
+#assign observations to training and testing sets
+train.set <- training.clean[trainset.indices, ]
+test.set <- training.clean[-trainset.indices, ]
+
+```
+
+##Try a random forest model with default as the predictor
+
+```{r}
+
+#Build random forest model
+rf.model1 <- randomForest(default ~ .,
+                         data = train.set,
+                         importance = TRUE,
+                         xtest = test.set[,-target.col],
+                         keep.forest = TRUE,
+                         ntree = 1000)
+
+#predictions for test set
+rf.pred <- data.frame(test.set, rf.model1$test$predicted)
+
+#confusion matrix
+rf.cm <- table(pred = rf.model1$test$predicted, true = test.set[,target.col])
+
+rf.cm
+
+```
+
+
+```{r}
+
+rf.cm.df <- as.data.frame(rf.cm)
+
+rf.eval <- get_evaluation_measures("Random Forest",
+                                   rf.cm.df$Freq[1],
+                                   rf.cm.df$Freq[2],
+                                   rf.cm.df$Freq[3],
+                                   rf.cm.df$Freq[4])
+
+#Get the AUC and add it to our evaluation measures data frame
+rf.eval$AUC <- get_auc(rf.model1$test$votes[,2], test.set[,target.col])
+
+rf.eval
+
+```
+##Try downsampling the Random Forest
+You need to splitting 
+```{r}
+nmin <- sum(train.set$default == "Y")
+
+trl <- trainControl(method = "cv",
+                    classProbs = TRUE,
+                    summaryFunction = twoClassSummary,
+                    sampling = 'down',
+                    savePredictions = T)
+
+set.seed(2)
+rfDownsampled <- train(default~.,
+                       data = train.set,
+                       trControl = trl,
+                       num.trees = 10,
+                       metric = "ROC")
+
+
+## Tell randomForest to sample by strata. Here, 
+## that means within each class
+                  #strata = train.set$default,
+## Now specify that the number of samples selected
+## within each class should be the same
+                  #sampsize = rep(nmin, 2))
+```
+
+> 
+> set.seed(2)
+> rfUnbalanced <- train(Class ~ ., data = training,
++                       method = "rf",
++                       ntree = 1500,
++                       tuneLength = 5,
++                       metric = "ROC",
++                       trControl = ctrl)
+Now we can compute the test set ROC curves for both procedures:
+
+> downProbs <- predict(rfDownsampled, testing, type = "prob")[,1]
+> downsampledROC <- roc(response = testing$Class, 
++                       predictor = downProbs,
++                       levels = rev(levels(testing$Class)))
+> 
+> unbalProbs <- predict(rfUnbalanced, testing, type = "prob")[,1]
+> unbalROC <- roc(response = testing$Class, 
++                 predictor = unbalProbs,
++                 levels = rev(levels(testing$Class)))
+And finally, we can plot the curves and determine the area under each curve:
+
+> plot(downsampledROC, col = rgb(1, 0, 0, .5), lwd = 2)
+Call:
+roc.default(response = testing$Class, predictor = downProbs, 
+   levels = rev(levels(testing$Class)))
+
+Data: downProbs in 701 controls (testing$Class Class2) < 4299 cases (testing$Class Class1).
+Area under the curve: 0.9503
+
+> plot(unbalROC, col = rgb(0, 0, 1, .5), lwd = 2, add = TRUE)
+Call:
+roc.default(response = testing$Class, predictor = unbalProbs,
+levels = rev(levels(testing$Class)))
+
+
+```
+Data: unbalProbs in 701 controls (testing$Class Class2) < 4299 cases (testing$Class Class1).
+Area under the curve: 0.9242
+
+
+```{r}
+
+#Build another random forest model with Limit Bal as predictor
+rf.model2 <- randomForest(default ~ .,
+                         data = train.set,
+                         importance = TRUE,
+                         xtest = test.set[,-target.col],
+                         keep.forest = TRUE,
+                         ntree = 1000)
+
+#predictions for test set
+rf.pred2 <- data.frame(test.set, rf.model2$test$predicted)
+
+#confusion matrix
+rf.cm2 <- table(pred = rf.mode12$test$predicted, true = test.set[,target.col])
+
+rf.cm2
+
+```
+
+#What about if we try to do some feature selection, creating a feature importance plot
+we don't have any features correlated higher than 0.75, so let's assess feature importance
+```{r}
+# load the data again to assess feature importance
+set.seed(7)
+data(train.set)
+# prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the model
+model <- train(default~., data=train.set, method="lvq", preProcess="scale", trControl=control)
+# estimate variable importance
+importance <- varImp(model, scale=FALSE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+```
+
+# What if we now try to use RFE to select the best features
+
+#What about trying RFE for feature selection
+ 
+```{r}
+set.seed(42)
+# load the data again
+data(train.set)
+# define the control using a random forest selection function
+control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# run the RFE algorithm
+results <- rfe(train.set[,1:16], train.set[,17], sizes=c(1:17), rfeControl=control)
+# summarize the results
+print(results)
+# list the chosen features
+predictors(results)
+# plot the results
+plot(results, type=c("g", "o"))
+```
+
+
+#Evaluation function
+```{r evaluation function}
+# We'll want to look at evaluation measures regularly, so create a function to calculate and return them
+get_evaluation_measures <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+```
+#AUC function
+```{r AUC function}
+#Now to get AUC. We'll do it again further on in our analysis, so write a function
+get_auc <- function(probabilities, targets) {
+  
+  probs = as.vector(probabilities)
+  
+  pred = prediction(probs,targets)
+  
+  perf_AUC = performance(pred, "auc")
+  
+  AUC = perf_AUC@y.values[[1]]
+  
+  return(AUC)
+  
+}
+```
+
+ 

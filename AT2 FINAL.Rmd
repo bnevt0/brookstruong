@@ -580,8 +580,30 @@ svmPred         <- predict(object = svmFit,    newdata = test.imp)
 ```{r}
 library(purrr)
 
-xtab <- table(xgbPredDownF,test.imp$default)
+xtab <- table(xgbPredD,test.imp$default)
 xgbCM <- confusionMatrix(xtab)
+
+xtab <- table(elastinetPred,test.imp$default)
+elastinetCM <- caret::confusionMatrix(xtab)
+
+xtab <- table(knnPred,test.imp$default)
+knnCM <-caret::confusionMatrix(xtab)
+
+xtab <- table(svmPred,test.imp$default)
+svmCM <-caret::confusionMatrix(xtab)
+
+
+CM_list <- list(xgbCM, elastinetCM, knnCM, svmCM)
+
+compiled_results <- tibble(
+    models = c('xgb','elastinet','knn','svm'),
+    accuracy = map_dbl(CM_list,~.x$overall[1]),
+    kappa = map_dbl(CM_list,~.x$overall[2]),
+    sensitivity = map_dbl(CM_list,~.x$byClass[1]),
+    specificity = map_dbl(CM_list,~.x$byClass[2]),
+    F1 = map_dbl(CM_list,~.x$byClass[7])
+)
+compiled_results %>% arrange(accuracy,kappa)
 
 #CM_list <- list(xgbCM, elastinetCM, knnCM, svmCM)
 
@@ -595,9 +617,21 @@ xgbCM <- confusionMatrix(xtab)
 #)
 #compiled_results %>% arrange(accuracy,kappa)
 
-xgbCM
 ```
 
+```{r}
+library(ggrepel)
+dotplot(reorder(models,accuracy)~accuracy,compiled_results, main = 'Accuracy (Test Set Performance)')
+ggplot(compiled_results, aes(F1, accuracy)) +
+    geom_point(color = 'blue',shape=1) +
+    geom_text_repel(aes(label = models),
+                    box.padding=unit(1,'lines'),
+                    max.iter=1e2,segment.size=.3,
+                    force=1) +
+    theme_bw()+
+    labs(x='F1',y='kappa', title='Kappa vs F1 (Test Set Performance)')
+
+```
 
 # Validation Set
 

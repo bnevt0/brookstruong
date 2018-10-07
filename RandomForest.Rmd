@@ -131,7 +131,6 @@ rf.model <- randomForest(default ~ .,
                          xtest = test.set[,-target.col],
                          keep.forest = TRUE,
                          sampsize = sampsize,
-                         mtry = 8,
                          ntree = 1000)
 
 rf.prob <- predict(rf.model, test.set[,-target.col])

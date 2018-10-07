@@ -97,12 +97,12 @@ get_auc <- function(probabilities, targets) {
 Clean our training data
 ```{r}
 training.clean <- clean_data(training.raw)
+
+training.clean = training.clean[complete.cases(training.clean), ]
 ```
 
 Get train and test sets
 ```{r}
-training.clean = training.clean[complete.cases(training.clean), ]
-
 trainset.size <- floor(0.80 * nrow(training.clean))
 
 target.col <- grep("default",names(training.clean))
@@ -116,6 +116,8 @@ trainset.indices <- sample(seq_len(nrow(training.clean[,-1])), size = trainset.s
 train.set <- training.clean[trainset.indices, ]
 test.set <- training.clean[-trainset.indices, ]
 
+sampsize = rep(sum(train.set$default == "Y"), 2)
+
 ```
 
 ##Try a random forest model
@@ -128,15 +130,14 @@ rf.model <- randomForest(default ~ .,
                          importance = TRUE,
                          xtest = test.set[,-target.col],
                          keep.forest = TRUE,
+                         sampsize = sampsize,
+                         mtry = 8,
                          ntree = 1000)
 
-#predictions for test set
-rf.pred <- data.frame(test.set, rf.model$test$predicted)
+rf.prob <- predict(rf.model, test.set[,-target.col])
 
 #confusion matrix
-rf.cm <- table(pred = rf.model$test$predicted, true = test.set[,target.col])
-
-rf.cm
+rf.cm <- table(pred = rf.prob, true = test.set[,target.col])
 
 ```
 
@@ -167,18 +168,17 @@ testset <- read.csv("AT2_credit_test_STUDENT.csv")
 #Train set is the full training set after cleaning for the tree models
 final.trainset <- training.clean
 
-str(final.trainset)
-
 #Test set
 final.testset <- clean_data(testset)
 
-str(final.testset)
+final.sampsize = rep(sum(final.trainset$default == "Y"), 2)
 
 #Run the model (don't include ID, age or gender columns in the testset)
 validation.model <- randomForest(default~.,
                                  data = final.trainset[,-1], 
                                  importance = TRUE, 
                                  xtest = final.testset[,-1],
+                                 sampsize = final.sampsize,
                                  ntree = 1000)
 
 #predictions for test set
